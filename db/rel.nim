@@ -77,7 +77,7 @@ proc put(rel: Rel, b: bytes) =
     let r = initBytes(copy, b.len)
     rel.data.insert r, -i - 1
 
-proc add*[X](r: Rel, a: X) =
+proc addX*[X](r: Rel, a: X) =
   var buf: ByteArray[256]
   buf.write(a)
   r.put buf.toBytes
@@ -93,6 +93,12 @@ proc add*[X,Y,Z](r: Rel, a: X, b: Y, c: Z) =
   buf.write(a)
   buf.write(b)
   buf.write(c)
+  r.put buf.toBytes
+
+proc add*(r: Rel, b: openarray[bytes]) =
+  var buf: ByteArray[256]
+  for i in b:
+    buf.add(i)
   r.put buf.toBytes
 
 proc showData*(rel: Rel) = 

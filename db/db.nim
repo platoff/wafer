@@ -5,11 +5,24 @@ import rel
 import encoding
 import tables
 import algorithm
+import strutils
+
+const
+  OrderLen = sizeof(uint) * 2
+  MaxVars = OrderLen
+  MaxPreds = 16
+  MaxIndices = 4
 
 type
+  # I'm going to use 4 bits per number, so
+  # 0x123 means [1,2,3], and so on
+  Order = distinct uint
+
+  # database is `an idexed rel`, which means is keep rel in various orders
   DB = ref object
-    eav: Rel
-    ave: Rel
+    indices: int
+    index: array[MaxIndices, Rel]
+    orders: array[MaxIndices, Order]
 
   TermKind = enum
     tkVar
@@ -20,15 +33,9 @@ type
     of tkVar: name: string
     of tkConst: val: bstring
 
-const 
-  MaxVars = 16
-  MaxPreds = 16
-
 type
   Matrix = array[MaxPreds, array[MaxVars, int]]
 
-
-type
   Pred = ref object
     db: DB
     terms: seq[Term]
@@ -37,19 +44,53 @@ type
     name: string
     select: bool
     
+  Plan = ref object
+    score: int
+    iorder: array[MaxPreds, Order]
+    execution: Matrix # seq[seq[int]] # execution plan, levels -> iterators
+    
   Query = ref object
     vars: seq[Var]
     preds: seq[Pred]
+    plan: Plan
     m: Matrix
 
-proc newDB(): DB = 
+proc add(order: var Order, i: int) {.inline.} =
+  assert((i > 0) and (i < 16))
+  order = Order((uint(order) shl 4) or uint(i))
+
+proc `[]`(order: Order, i: int): int {.inline.} =
+  int((uint(order) shr uint(i * 4)) and 0xf)
+
+proc reorder[T](a: openarray[T], o: Order): seq[T] =
+  newSeq[T](result, a.len)
+  var i = a.len - 1
+  var order = int(o)
+  while i >= 0:
+    result[i] = a[(order and 0xf)-1]
+    order = order shr 4
+    dec i
+
+proc newDB(layout: openarray[int], indices: openarray[Order]): DB = 
   new result
-  result.eav = newRel([sizeof E, sizeof A, -1])
-  result.ave = newRel([sizeof A, -1, sizeof E])  
+  result.indices = indices.len
+  for i, o in indices:
+    result.orders[i] = o
+    result.index[i] = newRel(layout.reorder(o))
 
 proc add[V](db: DB, e: E, a: A, v: V) =
-  db.eav.add(e, a, v)
-  db.ave.add(a, v, e)
+  var ebuf: ByteArray[sizeof E]
+  var abuf: ByteArray[sizeof A]
+  var vbuf: ByteArray[256]
+
+  ebuf.write(e)
+  abuf.write(a)
+  vbuf.write(v)
+
+  let b = [ebuf.toBytes, abuf.toBytes, vbuf.toBytes]
+
+  for i in 0..<db.indices:
+    db.index[i].add(b.reorder(db.orders[i]))
 
 proc `$`(t: Term): string =
   case t.kind
@@ -58,16 +99,37 @@ proc `$`(t: Term): string =
 
 proc `$`(p: Pred): string = $p.terms
 
+#proc `==`(a, b: Order): bool {.borrow.}
+proc endWith(a, b: Order): bool =
+  ((int(a) xor int(b)) and int(b)) == 0
+
 # Estimate if it's possible to build an iterator for
 # specified predicate in specified order.$
 # returns 0 if no iterator can be provider, or value of iterator --
 # bigger values mean better iterator (executes faster and produces less results)
-proc estimateIter(pred: Pred, order: array[MaxVars, int]): int =
-  #echo "requesing iterator for ", pred, " in the following order ", @order
-  #result = 1
-  for i in order:
-    if i != 0:
-      return i
+proc estimateIter(pred: Pred, order: Order): int =
+  #echo "estimating iterator: ", toHex(int(order))
+  for i in 0..<pred.db.indices:
+    if pred.db.orders[i].endWith(order):
+      echo "build iterator use rel of the order: ", toHex(int(pred.db.orders[i]))
+      return 1
+  echo "!!!Can't build iterator for order ", toHex(int(order))
+
+# proc estimateIter(pred: Pred, order: array[MaxVars, int]): int =
+#   for i in order:
+#     if i != 0:
+#       return i
+
+proc buildIter(pred: Pred, order: Order): TrieIter =
+  echo "building iter for ", pred, " in order ", toHex(int(order))
+  var rel: Rel
+  var constants: uint
+  for i in 0..<pred.db.indices:
+    if pred.db.orders[i].endWith(order):
+      echo "using rel of the order: ", toHex(int(pred.db.orders[i]))
+      rel = pred.db.index[i]
+      constants = uint(pred.db.orders[i]) xor uint(order)
+
 
 #
 #
@@ -107,12 +169,6 @@ proc select(q: Query, vars: varargs[string]) =
     let i = q.findOrAdd(v)
     q.vars[i].select = true
 
-type
-  Plan = ref object
-    score: int
-    iorder: Matrix # list of all iterators with variable order [pred, var]
-    execution: Matrix # seq[seq[int]] # execution plan, levels -> iterators
-
 #
 # Build query plan
 # 
@@ -120,6 +176,10 @@ type
 # proc newPlan(): Plan =
 #   new result
 #   result.execution = newSeq[seq[int]]()
+
+proc showMatrix(m: array[MaxPreds, Order], cols: int) =
+  for p in 0..< cols:
+    echo toHex(int(m[p]))
 
 proc showMatrix(m: Matrix, cols, rows: int) =
   for p in 0..< cols:
@@ -137,11 +197,10 @@ proc generatePlan(q: Query, order: openarray[int]): Plan =
   #result.iorder = newSeq[seq[int]]()
 
   for i, p in q.preds:
-    var j = 0
     for o in order:
       if q.m[i][o] > 0:
-        result.iorder[i][j] = q.m[i][o] # - 1
-        inc j
+        result.iorder[i].add(q.m[i][o])
+        #inc j
 
 #    if iterOrder.len > 0:
     # iters.add iter(p, iterOrder)
@@ -170,8 +229,6 @@ proc generatePlan(q: Query, order: openarray[int]): Plan =
   #showMatrix(result.iorder, q.preds.len, order.len)
   showMatrix(result.execution, order.len, q.preds.len)
   echo "SCORE: ", result.score
-
-
 
 proc deletePred(q: Query, p: int) =
   echo "WARNING: unused predicate: ", q.preds[p]
@@ -208,17 +265,34 @@ proc prepare(q: Query) =
           else:
             inc k
 
-  showMatrix(q.m, q.preds.len, q.vars.len)
+  #showMatrix(q.m, q.preds.len, q.vars.len)
 
   echo "join on vars: ", join
   sort(join, cmp[int])
 
+  var bestPlanScore = 0
   while true:
     echo join
-    let plan = q.generatePlan(join)  
+    let plan = q.generatePlan(join)
+    if plan.score > bestPlanScore:
+      q.plan = plan
+      bestPlanScore = plan.score
     if not nextPermutation(join):
       break
 
+proc execute(q: Query) =
+  # build iterators - we'll build them according to var ordering in plan.iorder
+  echo "vars: ", q.vars
+  echo "preds: ", q.preds
+  #echo "iorder:"
+  showMatrix(q.plan.iorder, q.preds.len)
+  echo "execution:"
+  showMatrix(q.plan.execution, q.vars.len, q.preds.len)
+
+  echo "building iterators: "
+  var iters = newSeq[TrieIter]()
+  for i in 0..<q.preds.len:
+    iters.add buildIter(q.preds[i], q.plan.iorder[i])
 
 proc newQuery(): Query =
   new result
@@ -229,17 +303,19 @@ when isMainModule:
   const Title = A(1)
   const Completed = A(2)
 
-  var db = newDB()
+  var db = newDB([sizeof E, sizeof A, -1], [Order(0x123), Order(0x213), Order(0x231)])
   db.add(1, Title, "sun!")
+  db.add(2, Title, "hey!!!")
 
-  db.eav.showData()
-  db.ave.showData()
+  db.index[0].showData()
+  db.index[1].showData()
 
   var q = newQuery()
 
   q.pred(db, variable("?e"), constant(Title), variable("?title"))
   q.pred(db, variable("?e"), constant(Completed), variable("?completed"))
-  q.pred(db, variable("?completed"))
-  q.pred(db, variable("?title"))
+  # q.pred(db, variable("?completed"))
+  # q.pred(db, variable("?title"))
   q.select("?title", "?completed")
   q.prepare
+  q.execute
