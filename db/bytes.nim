@@ -136,5 +136,28 @@ converter toBytes*[N](b: var ByteArray[N]): bytes {.inline, noSideEffect.} =
 
 type
   bstring* = seq[byte]
+  
+when not defined(JS):
+  type
+    TGenericSeq = object
+      len, reserved: int
+      when defined(gogc):
+        elemSize: int
+    PGenericSeq = ptr TGenericSeq
+else:
+  {.quit "JS not supported".}
+  
 
-proc newBString*(len: int): bstring = newSeq[byte](result, len)
+proc newBString*(len: int): bstring {.inline.} = newSeq[byte](result, len)
+proc toBytes*(bs: bstring): bytes {.inline.} =
+  let data = cast[ByteAddress](bs) +% sizeof(TGenericSeq)
+  initBytes(cast[pointer](data), cast[PGenericSeq](bs).len)
+
+when isMainModule:
+  var b = newBString(0)
+  b.add 11
+  b.add 55
+  b.add 33
+
+  echo b.toBytes
+  

@@ -48,10 +48,12 @@ proc leapfrog*[I](iters: seq[I]): LeapFrog[I] =
 # proc key*[I,K](leapfrog: LeapFrog[I]): K {.inline.} =
 #   leapfrog.iters[leapfrog.p].key
 
+proc key*[I](leapfrog: LeapFrog[I]): I {.inline.} = leapfrog.iters[0]
+
 proc atEnd*[I](leapfrog: LeapFrog[I]): bool {.inline.} = leapfrog.atEnd
 
 proc next*[I](leapfrog: var LeapFrog[I]) =
-  echo "leapfrog next: "
+  # echo "leapfrog next: "
   # for i in leapfrog.iters:
   #   echo i
   leapfrog.iters[leapfrog.p].next

@@ -123,12 +123,30 @@ proc estimateIter(pred: Pred, order: Order): int =
 proc buildIter(pred: Pred, order: Order): TrieIter =
   echo "building iter for ", pred, " in order ", toHex(int(order))
   var rel: Rel
-  var constants: uint
+  var relOrder: Order
   for i in 0..<pred.db.indices:
-    if pred.db.orders[i].endWith(order):
-      echo "using rel of the order: ", toHex(int(pred.db.orders[i]))
+    relOrder = pred.db.orders[i]
+    if relOrder.endWith(order):
+      echo "using rel of the order: ", toHex(int(relOrder))
       rel = pred.db.index[i]
-      constants = uint(pred.db.orders[i]) xor uint(order)
+      break
+
+  # echo "Rel:"
+  # showData rel
+
+  result = rel.newTrieIter
+  let term = pred.terms.reorder(relOrder)
+  var i = 0
+  while i < term.len:
+    if term[i].kind == tkConst:
+      result.open
+      result.seek(term[i].val.toBytes)
+      echo "opened and seek to ", term[i].val.toBytes
+      echo "layout: ", rel.sizes
+    else:
+      break
+    inc i
+  
 
 
 #
@@ -280,19 +298,51 @@ proc prepare(q: Query) =
     if not nextPermutation(join):
       break
 
+include leapfrog
+
 proc execute(q: Query) =
   # build iterators - we'll build them according to var ordering in plan.iorder
   echo "vars: ", q.vars
   echo "preds: ", q.preds
-  #echo "iorder:"
+  echo "iorder:"
   showMatrix(q.plan.iorder, q.preds.len)
-  echo "execution:"
-  showMatrix(q.plan.execution, q.vars.len, q.preds.len)
 
   echo "building iterators: "
   var iters = newSeq[TrieIter]()
   for i in 0..<q.preds.len:
     iters.add buildIter(q.preds[i], q.plan.iorder[i])
+
+  echo "execution:"
+  showMatrix(q.plan.execution, q.vars.len, q.preds.len)
+
+  var plan = newSeq[seq[TrieIter]]()
+  for i in 0..<q.vars.len:
+    var it = newSeq[TrieIter]()
+    for j in 0..<q.preds.len:
+      if q.plan.execution[i][j] != 0:
+        it.add iters[j]
+    plan.add it
+
+  var join: TrieJoin[TrieIter]
+  join.init(plan)
+
+  proc joinOn(v: int) =
+    var leapfrog = join.open
+    while not leapfrog.atEnd:
+      echo q.vars[v].name, " <- ", leapfrog.key.key
+      if v < q.vars.len - 1:
+        joinOn(v + 1)
+      leapfrog.next
+    join.up
+
+  joinOn(0)
+
+  # while true:
+  #   for v in 0..<q.vars.len:
+  #     let leapfrog = join.open
+  #     echo "joining on ", q.vars[v]
+
+
 
 proc newQuery(): Query =
   new result
@@ -304,8 +354,16 @@ when isMainModule:
   const Completed = A(2)
 
   var db = newDB([sizeof E, sizeof A, -1], [Order(0x123), Order(0x213), Order(0x231)])
-  db.add(1, Title, "sun!")
-  db.add(2, Title, "hey!!!")
+  db.add(101, Title, "Conquire the World")
+  db.add(101, Completed, false)
+  db.add(102, Title, "Do my homework")
+  db.add(102, Completed, true)
+  db.add(103, Title, "Write blogpost")
+  db.add(103, Completed, false)
+  db.add(104, Title, "Incomplete object")
+  db.add(105, Completed, true)
+  db.add(106, Title, "Smoke it")
+  db.add(106, Completed, true)
 
   db.index[0].showData()
   db.index[1].showData()
@@ -316,6 +374,6 @@ when isMainModule:
   q.pred(db, variable("?e"), constant(Completed), variable("?completed"))
   # q.pred(db, variable("?completed"))
   # q.pred(db, variable("?title"))
-  q.select("?title", "?completed")
+  q.select("?completed", "?title")
   q.prepare
   q.execute

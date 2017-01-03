@@ -20,6 +20,7 @@ type
     ofs: int
     variables: int
     layout: array[16, Layout]
+    sizes: seq[int]
     buffer: array[PageSize, byte]
 
 proc binaryFind[T](v: openarray[T], key: T): int =
@@ -39,9 +40,13 @@ proc binaryFind[T](v: openarray[T], key: T): int =
   
   result = -(left + 1)
 
+proc sizes*(rel: Rel): seq[int] {.inline.} = rel.sizes
+
 proc newRel*(sizes: openarray[int]): Rel =
   new result
   result.data = newSeq[bytes]()
+  result.sizes = newSeq[int]()
+  result.sizes.add sizes
   var i = 0
   var offset = 0
   while i < sizes.len and sizes[i] >= 0:
@@ -67,6 +72,8 @@ proc newRel*(sizes: openarray[int]): Rel =
     result.layout[i].vend = eoffset + 1
 
   result.variables = sizes.len
+
+proc variables*(r: Rel): int {.inline.} = r.variables
 
 proc put(rel: Rel, b: bytes) =
   let i = binaryFind(rel.data, b)
@@ -175,9 +182,9 @@ proc next*(i: TrieIter) {.inline.} =
 
 proc seek*(i: TrieIter, key: bytes) =
   while true:
-    i.next
     if i.atEnd or i.key >= key:
       break 
+    i.next
 
 proc `$`*(i: TrieIter): string = "TrieIter"
 
