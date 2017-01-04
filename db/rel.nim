@@ -2,7 +2,7 @@
 import bytes
 import encoding
 
-const PageSize = 65536
+const PageSize = 65536 * 8
 
 type
   AccessKind = enum
@@ -73,11 +73,16 @@ proc newRel*(sizes: openarray[int]): Rel =
 
   result.variables = sizes.len
 
+proc clear*(rel: Rel) =
+  rel.data.setLen(0)
+  rel.ofs = 0
+
 proc variables*(r: Rel): int {.inline.} = r.variables
 
 proc put(rel: Rel, b: bytes) =
   let i = binaryFind(rel.data, b)
   if i < 0:
+    assert(rel.ofs + b.len <= PageSize)
     let copy = addr rel.buffer[rel.ofs]
     b.copyTo(copy)
     inc rel.ofs, b.len
@@ -160,8 +165,10 @@ proc open*(i: TrieIter) =
     i.lengths[0] = i.rel.data.len
     i.atEnd = i.rel.data.len == 0
   else:
+    #echo "len/depth: ", i.lengths[i.depth], " pos: ", i.pos
+    i.atEnd = i.pos >= i.lengths[i.depth]
     i.lengths[i.depth + 1] = i.next(i.pos, i.lengths[i.depth])
-    i.atEnd = false
+    #echo "len/depth + 1: ", i.lengths[i.depth + 1], " pos: ", i.pos
   inc i.depth
 
 proc up*(i: TrieIter) =

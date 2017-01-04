@@ -16,10 +16,10 @@ const
 type
   # I'm going to use 4 bits per number, so
   # 0x123 means [1,2,3], and so on
-  Order = distinct uint
+  Order* = distinct uint
 
   # database is `an idexed rel`, which means is keep rel in various orders
-  DB = ref object
+  DB* = ref object
     indices: int
     index: array[MaxIndices, Rel]
     orders: array[MaxIndices, Order]
@@ -71,14 +71,14 @@ proc reorder[T](a: openarray[T], o: Order): seq[T] =
     order = order shr 4
     dec i
 
-proc newDB(layout: openarray[int], indices: openarray[Order]): DB = 
+proc newDB*(layout: openarray[int], indices: openarray[Order]): DB = 
   new result
   result.indices = indices.len
   for i, o in indices:
     result.orders[i] = o
     result.index[i] = newRel(layout.reorder(o))
 
-proc add[V](db: DB, e: E, a: A, v: V) =
+proc add*[V](db: DB, e: E, a: A, v: V) =
   var ebuf: ByteArray[sizeof E]
   var abuf: ByteArray[sizeof A]
   var vbuf: ByteArray[256]
@@ -92,6 +92,12 @@ proc add[V](db: DB, e: E, a: A, v: V) =
   for i in 0..<db.indices:
     db.index[i].add(b.reorder(db.orders[i]))
 
+proc showData*(db: DB, i: int) = db.index[i].showData()
+
+proc clear*(db: DB) =
+  for i in 0..<db.indices:
+    db.index[i].clear()
+
 proc `$`(t: Term): string =
   case t.kind
   of tkVar: t.name
@@ -101,7 +107,17 @@ proc `$`(p: Pred): string = $p.terms
 
 #proc `==`(a, b: Order): bool {.borrow.}
 proc endWith(a, b: Order): bool =
-  ((int(a) xor int(b)) and int(b)) == 0
+  var ia = int(a)
+  var ib = int(b)
+  while true:
+    let b4 = ib and 0xf
+    if b4 == 0:
+      return true
+    let a4 = ia and 0xf
+    if a4 != b4:
+      return false
+    ia = ia shr 4
+    ib = ib shr 4
 
 # Estimate if it's possible to build an iterator for
 # specified predicate in specified order.$
@@ -111,7 +127,7 @@ proc estimateIter(pred: Pred, order: Order): int =
   #echo "estimating iterator: ", toHex(int(order))
   for i in 0..<pred.db.indices:
     if pred.db.orders[i].endWith(order):
-      echo "build iterator use rel of the order: ", toHex(int(pred.db.orders[i]))
+      #echo "build iterator use rel of the order: ", toHex(int(pred.db.orders[i]))
       return 1
   echo "!!!Can't build iterator for order ", toHex(int(order))
 
@@ -121,13 +137,13 @@ proc estimateIter(pred: Pred, order: Order): int =
 #       return i
 
 proc buildIter(pred: Pred, order: Order): TrieIter =
-  echo "building iter for ", pred, " in order ", toHex(int(order))
+  #echo "building iter for ", pred, " in order ", toHex(int(order))
   var rel: Rel
   var relOrder: Order
   for i in 0..<pred.db.indices:
     relOrder = pred.db.orders[i]
     if relOrder.endWith(order):
-      echo "using rel of the order: ", toHex(int(relOrder))
+      #echo "using rel of the order: ", toHex(int(relOrder))
       rel = pred.db.index[i]
       break
 
@@ -141,23 +157,18 @@ proc buildIter(pred: Pred, order: Order): TrieIter =
     if term[i].kind == tkConst:
       result.open
       result.seek(term[i].val.toBytes)
-      echo "opened and seek to ", term[i].val.toBytes
-      echo "layout: ", rel.sizes
+      # echo "opened and seek to ", term[i].val.toBytes
+      # echo "layout: ", rel.sizes
+      # echo "iterator at end: ", result.atEnd
     else:
       break
     inc i
-  
 
-
-#
-#
-#
-
-proc variable(name: string): Term =
+proc variable*(name: string): Term =
   result.kind = tkVar
   result.name = name
 
-proc constant(v: DBType): Term =
+proc constant*(v: DBType): Term =
   result.kind = tkConst
   result.val = toBstring(v)
 
@@ -170,7 +181,7 @@ proc findOrAdd(q: Query, name: string): int =
   q.vars.setLen(result + 1)
   q.vars[result].name = name
 
-proc pred(q: Query; db: DB, pred: varargs[Term]) = 
+proc pred*(q: Query; db: DB, pred: varargs[Term]) = 
   var p = new Pred
   p.db = db
   p.terms = newSeq[Term]()
@@ -182,7 +193,7 @@ proc pred(q: Query; db: DB, pred: varargs[Term]) =
   
   q.preds.add p
 
-proc select(q: Query, vars: varargs[string]) =
+proc select*(q: Query, vars: varargs[string]) =
   for v in vars:
     let i = q.findOrAdd(v)
     q.vars[i].select = true
@@ -258,7 +269,7 @@ proc deletePred(q: Query, p: int) =
   for i in p..<(MaxPreds-1):
     q.m[i] = q.m[i+1]
 
-proc prepare(q: Query) =
+proc prepare*(q: Query) =
 
   echo "vars: ", q.vars
   showMatrix(q.m, q.preds.len, q.vars.len)
@@ -300,20 +311,20 @@ proc prepare(q: Query) =
 
 include leapfrog
 
-proc execute(q: Query) =
+proc execute*(q: Query) =
   # build iterators - we'll build them according to var ordering in plan.iorder
-  echo "vars: ", q.vars
-  echo "preds: ", q.preds
-  echo "iorder:"
-  showMatrix(q.plan.iorder, q.preds.len)
+  # echo "vars: ", q.vars
+  # echo "preds: ", q.preds
+  # echo "iorder:"
+  # showMatrix(q.plan.iorder, q.preds.len)
 
-  echo "building iterators: "
+  # echo "building iterators: "
   var iters = newSeq[TrieIter]()
   for i in 0..<q.preds.len:
     iters.add buildIter(q.preds[i], q.plan.iorder[i])
 
-  echo "execution:"
-  showMatrix(q.plan.execution, q.vars.len, q.preds.len)
+  # echo "execution:"
+  # showMatrix(q.plan.execution, q.vars.len, q.preds.len)
 
   var plan = newSeq[seq[TrieIter]]()
   for i in 0..<q.vars.len:
@@ -329,7 +340,7 @@ proc execute(q: Query) =
   proc joinOn(v: int) =
     var leapfrog = join.open
     while not leapfrog.atEnd:
-      echo q.vars[v].name, " <- ", leapfrog.key.key
+      #echo v, " <- ", leapfrog.key.key
       if v < q.vars.len - 1:
         joinOn(v + 1)
       leapfrog.next
@@ -344,7 +355,7 @@ proc execute(q: Query) =
 
 
 
-proc newQuery(): Query =
+proc newQuery*(): Query =
   new result
   result.preds = newSeq[Pred]()
   result.vars = newSeq[Var]()

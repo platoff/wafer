@@ -11,8 +11,12 @@ type
 proc write*[N](b: var ByteArray[N], v: int) {.inline.} =
   var ini = v
   var outv: int
-  bigEndian64(addr outv, addr ini)
-  b.add(initBytes(addr outv, 8))
+  when sizeof(int) == 8:
+    bigEndian64(addr outv, addr ini)
+  else:
+    bigEndian32(addr outv, addr ini)
+  
+  b.add(initBytes(addr outv, sizeof(int)))
 
 proc write*[N](b: var ByteArray[N], v: A) {.inline.} = write(b, int(v))
 
@@ -21,12 +25,14 @@ proc write*[N](b: var ByteArray[N], v: bool) {.inline.} = b.add byte(int(v))
 proc write*[N](b: var ByteArray[N], v: string) {.inline.} = add(b, v.toBytes)
 
 proc toBstring*(v: int): bstring =
-  assert sizeof(int) == 8
   newSeq[byte](result, sizeof int)
   var ini = v
   var outv: int
-  bigEndian64(addr outv, addr ini)
-  initBytes(addr outv, 8).copyTo(addr result[0])
+  when sizeof(int) == 8:
+    bigEndian64(addr outv, addr ini)
+  else:
+    bigEndian32(addr outv, addr ini)
+  initBytes(addr outv, sizeof(int)).copyTo(addr result[0])
 
 proc toBstring*(v: A): bstring = toBstring(int(v))
 
