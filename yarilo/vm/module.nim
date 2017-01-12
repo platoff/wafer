@@ -19,13 +19,6 @@ type
     variableNames: SymbolTable
     name: ObjString
 
-proc newModule*(gc: GC, name: ObjString): Rooted[ObjModule] =
-  let module = gc.allocate(TModule)
-  module.name = name
-  result = gc.root(cast[ObjModule](module))
-
-import map
-
 proc defineVariable(gc: GC, module: var TModule, name: cstring,
                        length: int, value: Value): int =
   if module.variables.len == MaxModuleVars: 
@@ -44,4 +37,22 @@ proc defineVariable(gc: GC, module: var TModule, name: cstring,
   else:
     # Already explicitly declared.
     result = -1
+
+#
+# A P I
+#
+
+proc newModule*(gc: GC, name: ObjString): Rooted[ObjModule]  =
+  let module = gc.allocate(TModule)
+  module.name = name
+  result = gc.root(cast[ObjModule](module))
+
+proc variables*(module: ObjModule): Buffer[Value] = 
+  cast[ptr TModule](module).variables
+
+proc variableNames*(module: ObjModule): SymbolTable = 
+  cast[ptr TModule](module).variableNames
+
+proc defineVariable*(gc: GC, module: ObjModule, name: cstring, length: int, value: Value): int =
+  gc.defineVariable(cast[ptr TModule](module)[], name, length, value)
 

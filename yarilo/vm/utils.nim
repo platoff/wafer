@@ -33,12 +33,12 @@ proc allocate*[A](a: A, T: typedesc, n: int): HugeArray[T] =
 proc allocateFlex*[A](a: A, T: typedesc, I: typedesc, n: int): ptr T = 
   cast[ptr T](a.reallocate(nil, 0, sizeof(T) + n * sizeof I))
 
-# proc init*(buffer: var Buffer) {.inline.} =
+# proc init*(buffer: var Buffer) =
 #   buffer.data = nil
 #   buffer.count = 0
 #   buffer.capacity = 0  
 
-proc len*(buffer: Buffer): int = int(buffer.count)
+proc len*(buffer: Buffer): int = int(buffer.count) 
 
 iterator items*[T](buf: Buffer[T]): T =
   for i in 0..<int(buf.count):
@@ -94,15 +94,3 @@ proc add*[A](allocator: A, symbols: var SymbolTable, name: cstring, length: int)
   allocator.add(symbols, symbol)
   result = int(symbols.count) - 1
 
-
-when isMainModule:
-  type Al = object
-
-  proc reallocate(a: Al, p: pointer, oldSize, newSize: int): pointer = 
-    realloc(p, newSize)
-  var 
-    a: Al
-    b: Buffer[int]
-  a.add(b, 8)
-
-  echo b[0]

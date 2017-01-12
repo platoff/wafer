@@ -33,20 +33,22 @@ proc getModule(vm: VM, name: Value): ObjModule =
     result = moduleValue.asModule
 
 proc loadModule(vm: VM, name: Value, source: cstring) =
+  let gc = vm.gc
   var module = vm.getModule(name)
   if module == nil:
-    var newModule = vm.gc.newModule(name.asString)
-    vm.gc.mapSet(vm.modules, name, newModule)
-    #   module = m
+    var newModule = gc.newModule(name.asString)
+    gc.mapSet(vm.modules, name, newModule)
+    module = gc.release newModule
 
-    # # Implicitly import the core module.
-    # let coreModule = getModule(vm, NullVal)
-    # for i in 0..<int(coreModule.variables.len):
-    #   discard defineVariable(vm, module,
-    #                       coreModule.variableNames[i].buffer,
-    #                       coreModule.variableNames[i].length,
-    #                       coreModule.variables[i])
+    # Implicitly import the core module.
+    let coreModule = getModule(vm, NullVal)
+    for i in 0..<int(coreModule.variables.len):
+      discard gc.defineVariable(module,
+                          coreModule.variableNames[i].buffer,
+                          coreModule.variableNames[i].length,
+                          coreModule.variables[i])
 
 
 when isMainModule:
   var vm = newVM(65536)
+  vm.loadModule(NullVal, "xxx")

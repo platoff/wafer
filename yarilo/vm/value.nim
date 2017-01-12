@@ -42,10 +42,10 @@ var
   FalseVal* = Value(kind: vkFalse, obj: nil)
   NullVal* = Value(kind: vkNull, obj: nil)
 
-proc isUndefined*(val: Value): bool = val.kind == vkUndefined
-proc isFalse*(val: Value): bool = val.kind == vkFalse
-proc isObj*(val: Value): bool = val.kind == vkObj
-proc isNum*(val: Value): bool = val.kind == vkNum
+template isUndefined*(val: Value): bool = val.kind == vkUndefined
+template isFalse*(val: Value): bool = val.kind == vkFalse
+template isObj*(val: Value): bool = val.kind == vkObj
+template isNum*(val: Value): bool = val.kind == vkNum
 
 proc asVal*(p: ObjectType): Value =
   result.kind = vkObj
@@ -71,7 +71,7 @@ proc `==`*(a, b: Value): bool =
 type
   DoubleBits = ptr array[2, uint32]
 
-proc hash(bits: DoubleBits): uint32 {.inline.} =
+proc hash(bits: DoubleBits): uint32 =
   result = bits[0] xor bits[1]  
   result = result xor ((result shr 20) xor (result shr 12))
   result = result xor ((result shr 7) xor (result shr 4))
@@ -99,8 +99,6 @@ const
 # The maximum number of temporary objects that can be made visible to the GC
 # at one time.
   WrenMaxTempRoots = 5
-
-import utils
 
 type
   Rooted*[T: ObjectType] = ptr T
@@ -140,10 +138,20 @@ proc acquireRoot(gc: GC): PTempRoot =
   result = gc.freeRoots
   assert result != nil
   gc.freeRoots = result.next
+  result.next = gc.busyRoots
+  gc.busyRoots = result
 
-{.experimental.} 
-proc `=destroy`*[T](r: var Rooted[T]) =
-  echo "destroyed!"
+proc root*[T: ObjectType](gc: GC, obj: T): Rooted[T] =
+  let tempRoot = acquireRoot(gc)
+  tempRoot.obj = (Obj)obj
+  result = cast[Rooted[T]](tempRoot)
+
+proc release*[T](gc: GC, r: Rooted[T]): T =
+  let tempRoot = cast[PTempRoot](r)
+  gc.busyRoots = tempRoot.next
+  tempRoot.next = gc.freeRoots
+  gc.freeRoots = tempRoot.next 
+  result = r[]
 
 proc init*(gc: GC, obj: var TObj, kind: ObjKind) =
   obj.kind = kind
@@ -151,11 +159,6 @@ proc init*(gc: GC, obj: var TObj, kind: ObjKind) =
   obj.classObj = gc.classes[kind]
   obj.next = gc.first
   gc.first = addr obj
-
-proc root*[T: ObjectType](gc: GC, obj: T): Rooted[T] =
-  let tempRoot = acquireRoot(gc)
-  tempRoot.obj = (Obj)obj
-  result = cast[Rooted[T]](tempRoot)
   
 proc collectGarbage(gc: GC) =
   discard
