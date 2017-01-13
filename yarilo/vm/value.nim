@@ -1,4 +1,6 @@
 
+include utils
+
 type
   ValueKind = enum
     vkFalse
@@ -8,67 +10,62 @@ type
     vkObj
     vkUndefined
 
-  #PValue = ptr Value
-  Value* = object
-    case kind: ValueKind
-    of vkNum: num: float64
-    else: obj: Obj
+when defined(NanTagging):
+  type
+    Value = uint64  
+else:
+  type
+    Value = object
+      case kind: ValueKind
+      of vkNum: num: float64
+      else: obj: pointer
 
-  ObjKind* = enum
+type
+  ObjKind = enum
     okClass
     okString
     okModule
     okMap
 
-  Obj* = ptr TObj
-  ObjClass* = distinct Obj
-  TObj* = object
+  Obj = ptr TObj
+  TObj = object
     kind: ObjKind
     isDark: bool
     classObj: ObjClass
     next: Obj # The next object in the linked list of all currently allocated objects.
 
-  ObjString* = distinct Obj
-  ObjMap* = distinct Obj
-  ObjModule* = distinct Obj
+  ObjString = ptr TString
+  TString = object
+    obj: TObj
+    length: uint32
+    hash: uint32
+    value: FlexibleArray[char]
 
-  ObjectType* = ObjString | ObjMap | ObjModule
+  MapEntry = object
+    key: Value
+    value: Value
 
-proc `==`*(a, b: ObjModule): bool =
-  cast[pointer](a) == cast[pointer](b)
+  ObjMap* = ptr TMap
+  TMap = object
+    obj: TObj
+    capacity: uint32
+    count: uint32
+    entries: HugeArray[MapEntry]
+  
 
-var
-  UndefinedVal* = Value(kind: vkUndefined, obj: nil)
-  FalseVal* = Value(kind: vkFalse, obj: nil)
-  NullVal* = Value(kind: vkNull, obj: nil)
+  ObjModule* = ptr TModule
+  TModule = object
+    obj: TObj
+    variables: Buffer[Value]
+    variableNames: SymbolTable
+    name: ObjString
 
-template isUndefined*(val: Value): bool = val.kind == vkUndefined
-template isFalse*(val: Value): bool = val.kind == vkFalse
-template isObj*(val: Value): bool = val.kind == vkObj
-template isNum*(val: Value): bool = val.kind == vkNum
+  ObjClass = ptr TClass 
+  TClass = object
+    obj: TObj
 
-proc asVal*(p: ObjectType): Value =
-  result.kind = vkObj
-  result.obj = Obj(p)
+  ObjectType = ObjString | ObjMap | ObjModule | ObjClass
 
-proc asObj*(val: Value): Obj =
-  assert val.kind == vkObj or val.kind == vkNull
-  val.obj
-
-proc asString*(val: Value): ObjString =
-  let obj = val.asObj
-  assert obj == nil or obj.kind == okString
-  result = ObjString(obj)
-
-proc asModule*(val: Value): ObjModule =
-  let obj = val.asObj
-  assert obj == nil or obj.kind == okModule
-  result = ObjModule(obj)
-
-proc `==`*(a, b: Value): bool = 
-  echo "not implemented"
-
-type
   DoubleBits = ptr array[2, uint32]
 
 proc hash(bits: DoubleBits): uint32 =
@@ -76,24 +73,31 @@ proc hash(bits: DoubleBits): uint32 =
   result = result xor ((result shr 20) xor (result shr 12))
   result = result xor ((result shr 7) xor (result shr 4))
 
-proc hash(num: float64): uint32 = 
-  var val = num
-  hash(cast[DoubleBits](addr val))
+proc hash(obj: Obj): uint32
+
+when defined(NanTagging):
+  include value64
+else:
+  include valued
+
+proc asString(val: Value): ObjString =
+  let obj = val.asObj
+  assert obj == nil or obj.kind == okString
+  result = cast[ObjString](obj)
+
+proc asModule(val: Value): ObjModule =
+  let obj = val.asObj
+  assert obj == nil or obj.kind == okModule
+  result = cast[ObjModule](obj)
+
+proc `==`(a, b: Value): bool = 
+  if a === b:
+    result = true
+  else:
+    echo " == is not fully implemented."
 
 proc hash(obj: Obj): uint32 =
-  echo "not implemented"
-
-proc hashValue*(val: Value): uint32 =
-  when defined(NanTagging):
-    echo "not implemented"
-  else:
-    case val.kind:
-    of vkFalse: 0u32
-    of vkNull: 1
-    of vkNum: hash(val.num)
-    of vkTrue: 2
-    of vkObj: hash(val.asObj)
-    else: 0u32
+  echo "not implemented hash(Obj)"
 
 const 
 # The maximum number of temporary objects that can be made visible to the GC
@@ -141,12 +145,12 @@ proc acquireRoot(gc: GC): PTempRoot =
   result.next = gc.busyRoots
   gc.busyRoots = result
 
-proc root*[T: ObjectType](gc: GC, obj: T): Rooted[T] =
+proc root[T: ObjectType](gc: GC, obj: T): Rooted[T] =
   let tempRoot = acquireRoot(gc)
-  tempRoot.obj = (Obj)obj
+  tempRoot.obj = cast[Obj](obj)
   result = cast[Rooted[T]](tempRoot)
 
-proc release*[T](gc: GC, r: Rooted[T]): T =
+proc release[T](gc: GC, r: Rooted[T]): T =
   let tempRoot = cast[PTempRoot](r)
   gc.busyRoots = tempRoot.next
   tempRoot.next = gc.freeRoots
@@ -163,7 +167,7 @@ proc init*(gc: GC, obj: var TObj, kind: ObjKind) =
 proc collectGarbage(gc: GC) =
   discard
 
-proc reallocate*(gc: GC, memory: pointer; oldSize, newSize: int): pointer =
+proc reallocate(gc: GC, memory: pointer; oldSize, newSize: int): pointer =
   # If new bytes are being allocated, add them to the total count. If objects
   # are being completely deallocated, we don't track that (since we don't
   # track the original size). Instead, that will be handled while marking

@@ -1,6 +1,7 @@
 
 type
-  HugeArray*[T] = ptr array[1_000_000, T]
+  FlexibleArray{.unchecked.}[T] = array[0..0, T]
+  HugeArray*[T] = ptr FlexibleArray[T]
 
   Buffer*[T] = object
     data: HugeArray[T]

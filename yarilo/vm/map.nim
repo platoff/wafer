@@ -1,32 +1,20 @@
 
-import value
-import utils
+include string
 
-type
-  PMapEntry = ptr MapEntry
-  MapEntry = object
-  # The entry's key, or UNDEFINED_VAL if the entry is not in use.
-    key: Value
-
-  # The value associated with the key. If the key is UNDEFINED_VAL, this will
-  # be false to indicate an open available entry or true to indicate a
-  # tombstone -- an entry that was previously in use but was then deleted.
-    value: Value
-
-  TMap = object
-    obj: TObj
-    capacity: uint32
-    count: uint32
-    entries: HugeArray[MapEntry]
-
-
-proc newMap*(gc: GC, map: var ObjMap) =
-  map = cast[ObjMap](gc.allocate(TMap))
 
 const
   MinCapacity = 16
   GrowFactor = 2
   MapLoadPercent = 75
+
+type
+  PMapEntry = ptr MapEntry
+
+proc newMap(gc: GC, map: var ObjMap) =
+  map = cast[ObjMap](gc.allocate(TMap))
+
+proc newMap(gc: GC): Rooted[ObjMap] =
+  gc.root(cast[ObjMap](gc.allocate(TMap)))
 
 # Looks for an entry with [key] in an array of [capacity] [entries].
 
@@ -41,7 +29,7 @@ proc findEntry(entries: HugeArray[MapEntry], capacity: int,
   
   # Figure out where to insert it in the table. Use open addressing and
   # basic linear probing.
-  let startIndex = int(hashValue(key)) mod capacity
+  let startIndex = int(hash(key)) mod capacity
   var index = startIndex
   
   # If we pass a tombstone and don't end up finding the key, its entry will
@@ -100,7 +88,7 @@ proc insertEntry(entries: HugeArray[MapEntry], capacity: int; key, value: Value)
     result = true;
 
 # Updates [map]'s entry array to [capacity].
-proc resizeMap(gc: GC, map: var TMap, capacity: int) =
+proc resizeMap(gc: GC, map: ObjMap, capacity: int) =
   # Create the new empty hash table.
   let entries = gc.allocate(MapEntry, capacity)
   for i in 0..<capacity:
@@ -121,13 +109,13 @@ proc resizeMap(gc: GC, map: var TMap, capacity: int) =
   map.entries = entries
   map.capacity = uint32(capacity)
 
-proc `[]`*(map: ObjMap, key: Value): Value =
+proc `[]`(map: ObjMap, key: Value): Value =
   let self = cast[ptr TMap](map)
   var entry: PMapEntry
   if findEntry(self.entries, int(self.capacity), key, entry): entry.value
   else: UndefinedVal
 
-proc mapSet*(gc: GC, map: var TMap; key, value: Value) =
+proc mapSet(gc: GC, map: ObjMap; key, value: Value) =
   # If the map is getting too full, make room first.
   if map.count + 1 > map.capacity * MapLoadPercent div 100:
     # Figure out the new hash table size.
@@ -136,10 +124,4 @@ proc mapSet*(gc: GC, map: var TMap; key, value: Value) =
 
   if insertEntry(map.entries, int(map.capacity), key, value):
     inc map.count
-
-proc mapSet*(gc: GC, map: ObjMap; key, value: Value) =
-  gc.mapSet(cast[ptr TMap](map)[], key, value)
-
-proc mapSet*(gc: GC, map: ObjMap; key: Value, value: Rooted) =
-  gc.mapSet(cast[ptr TMap](map)[], key, value[].asVal)
   

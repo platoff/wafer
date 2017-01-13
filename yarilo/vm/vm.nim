@@ -1,8 +1,5 @@
 
-import utils
-import value
-import module
-import map
+include module
 
 type
   VM* = ptr WrenVM
@@ -16,7 +13,7 @@ proc gc*(vm: VM): GC = addr vm.gcObj
 proc initializeCore(vm: VM) =
   let gc = vm.gc
   var coreModule = gc.newModule(NullVal.asString)
-  gc.mapSet(vm.modules, NullVal, coreModule)
+  gc.mapSet(vm.modules, NullVal, coreModule[].asVal)
 
 proc newVM*(initialHeapSize: int): VM =
   result = create WrenVM
@@ -37,7 +34,7 @@ proc loadModule(vm: VM, name: Value, source: cstring) =
   var module = vm.getModule(name)
   if module == nil:
     var newModule = gc.newModule(name.asString)
-    gc.mapSet(vm.modules, name, newModule)
+    gc.mapSet(vm.modules, name, newModule[].asVal)
     module = gc.release newModule
 
     # Implicitly import the core module.
@@ -49,6 +46,3 @@ proc loadModule(vm: VM, name: Value, source: cstring) =
                           coreModule.variables[i])
 
 
-when isMainModule:
-  var vm = newVM(65536)
-  vm.loadModule(NullVal, "xxx")

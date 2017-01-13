@@ -1,6 +1,5 @@
 
-import value
-import utils
+include map
 
 #
 # Module
@@ -12,14 +11,12 @@ import utils
 const 
   MaxModuleVars = 65536
 
-type
-  TModule = object
-    obj: TObj
-    variables: Buffer[Value]
-    variableNames: SymbolTable
-    name: ObjString
+proc newModule*(gc: GC, name: ObjString): Rooted[ObjModule]  =
+  let module = gc.allocate(TModule)
+  module.name = name
+  result = gc.root(cast[ObjModule](module))
 
-proc defineVariable(gc: GC, module: var TModule, name: cstring,
+proc defineVariable(gc: GC, module: ObjModule, name: cstring,
                        length: int, value: Value): int =
   if module.variables.len == MaxModuleVars: 
     return -2
@@ -38,21 +35,4 @@ proc defineVariable(gc: GC, module: var TModule, name: cstring,
     # Already explicitly declared.
     result = -1
 
-#
-# A P I
-#
-
-proc newModule*(gc: GC, name: ObjString): Rooted[ObjModule]  =
-  let module = gc.allocate(TModule)
-  module.name = name
-  result = gc.root(cast[ObjModule](module))
-
-proc variables*(module: ObjModule): Buffer[Value] = 
-  cast[ptr TModule](module).variables
-
-proc variableNames*(module: ObjModule): SymbolTable = 
-  cast[ptr TModule](module).variableNames
-
-proc defineVariable*(gc: GC, module: ObjModule, name: cstring, length: int, value: Value): int =
-  gc.defineVariable(cast[ptr TModule](module)[], name, length, value)
 

@@ -1,14 +1,5 @@
 
-import value
-import utils
-
-type
-  FlexibleArray{.unchecked.}[T] = array[0..0, T]
-  TString = object
-    obj: TObj
-    length: uint32
-    hash: uint32
-    value: FlexibleArray[char]
+include value
 
 # Calculates and stores the hash code for [string].
 # FNV-1a hash. See: http://www.isthe.com/chongo/tech/comp/fnv/
@@ -26,7 +17,7 @@ proc allocateString(gc: GC, length: int): ptr TString =
   result.length = uint32(length)
   result.value[length] = char(0)
 
-proc newString*(gc: GC, text: cstring, length: int): Rooted[ObjString] =
+proc newString(gc: GC, text: cstring, length: int): Rooted[ObjString] =
   assert(length == 0 or text != nil, "Unexpected null string.")
   let str = gc.allocateString(length)
   if length > 0 and text != nil:
@@ -34,4 +25,6 @@ proc newString*(gc: GC, text: cstring, length: int): Rooted[ObjString] =
   hashString(str)
   result = gc.root(cast[ObjString](str))
 
+proc newString(gc: GC, text: cstring): Rooted[ObjString] = 
+  gc.newString(text, text.len)
 
