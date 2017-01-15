@@ -1,9 +1,9 @@
 
 type
   FlexibleArray{.unchecked.}[T] = array[0..0, T]
-  HugeArray*[T] = ptr FlexibleArray[T]
+  HugeArray[T] = ptr FlexibleArray[T]
 
-  Buffer*[T] = object
+  Buffer[T] = object
     data: HugeArray[T]
     count: uint32
     capacity: uint32
@@ -12,45 +12,50 @@ type
     buffer: cstring
     length: int
 
-  SymbolTable* = Buffer[String]
+  SymbolTable = Buffer[String]
 
-proc buffer*(s: String): cstring = s.buffer
-proc length*(s: String): int = s.length
+proc isEqual[T](a, b: var FlexibleArray[T], length: int): bool =
+  for i in 0..<length:
+    if a[i] != b[i]:
+      return false
+  result = true
 
 #
 # Allocator helpers
 #
 
-proc deallocate*[A](a: A, p: pointer) = 
-  discard a.reallocate(p, 0, 0)
+proc deallocate[A](a: A, p: pointer, oldSize: int) = 
+  discard a.reallocate(p, oldSize, 0)
 
-proc allocate*[A](a: A, T: typedesc): ptr T = 
+proc allocate[A](a: A, T: typedesc): ptr T = 
   result = cast[ptr T](a.reallocate(nil, 0, sizeof T))
   zeroMem(result, sizeof T)
 
-proc allocate*[A](a: A, T: typedesc, n: int): HugeArray[T] = 
+proc allocate[A](a: A, T: typedesc, n: int): HugeArray[T] = 
   cast[HugeArray[T]](a.reallocate(nil, 0, n * sizeof T))
 
-proc allocateFlex*[A](a: A, T: typedesc, I: typedesc, n: int): ptr T = 
+proc allocateFlex[A](a: A, T: typedesc, I: typedesc, n: int): ptr T = 
   cast[ptr T](a.reallocate(nil, 0, sizeof(T) + n * sizeof I))
 
-# proc init*(buffer: var Buffer) =
-#   buffer.data = nil
-#   buffer.count = 0
-#   buffer.capacity = 0  
+#
+# Buffers
+#
 
-proc len*(buffer: Buffer): int = int(buffer.count) 
+proc init(buf: var Buffer) =
+  buf.data = nil
+  buf.count = 0
+  buf.capacity = 0
 
-iterator items*[T](buf: Buffer[T]): T =
-  for i in 0..<int(buf.count):
-    yield buf.data[i]
+proc clear[A](a: A, buf: var Buffer) =
+  a.deallocate(buf.data, int(buf.capacity))
+  buf.init
 
-proc `[]`*[T](buf: Buffer[T], i: int): T = 
-  assert i < buf.len
+proc `[]`[T](buf: Buffer[T], i: int): T = 
+  assert i < int(buf.count)
   buf.data[i]
   
-proc `[]=`*[T](buf: var Buffer[T], i: int, val: T) = 
-  assert i < buf.len
+proc `[]=`[T](buf: var Buffer[T], i: int, val: T) = 
+  assert i < int(buf.count)
   buf.data[i] = val
 
 # From: http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2Float
@@ -73,20 +78,20 @@ proc fill[A,T](allocator: A, buffer: var Buffer[T], value: T, count: int) =
       buffer.data[buffer.count] = value
       inc buffer.count
 
-proc add*[A,T](allocator: A, buffer: var Buffer[T], val: T) = allocator.fill(buffer, val, 1)
+proc add[A,T](allocator: A, buffer: var Buffer[T], val: T) = allocator.fill(buffer, val, 1)
 
 #
 # Symbol Table
 # 
 
-proc find*(table: SymbolTable, name: cstring, length: int): int =
+proc find(table: SymbolTable, name: cstring, length: int): int =
   for i in 0..<int(table.count):
     if table.data[i].length == length and
       equalMem(table.data[i].buffer, name, length):
         return i
   result = -1
 
-proc add*[A](allocator: A, symbols: var SymbolTable, name: cstring, length: int): int =
+proc add[A](allocator: A, symbols: var SymbolTable, name: cstring, length: int): int =
   var symbol: String
   symbol.buffer = cast[cstring](allocator.allocate(char, length + 1))
   copyMem(symbol.buffer, name, length)

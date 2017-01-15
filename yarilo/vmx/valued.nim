@@ -5,7 +5,12 @@ proc isFalse(val: Value): bool = val.kind == vkFalse
 proc isObj(val: Value): bool = val.kind == vkObj
 proc isNum(val: Value): bool = val.kind == vkNum
 
-proc asVal(obj: Obj): Value =
+proc NumVal(num: float64): Value =
+  result.kind = vkNum
+  result.num = num
+
+converter asVal(obj: Obj): Value =
+  assert obj != nil
   result.kind = vkObj
   result.obj = obj
 

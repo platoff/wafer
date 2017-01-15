@@ -1,23 +1,30 @@
 
-include module
+include gc
 
 type
-  VM* = ptr WrenVM
-  WrenVM = object
-    gcObj: GCObj
+  VM[GC,C] = ptr WrenVM[GC,C]
+  WrenVM[GC,C] = object
+    gc: GC
+    compiler: C
     modules: ObjMap  
     methodNames: SymbolTable
 
-proc gc*(vm: VM): GC = addr vm.gcObj
+proc gc(vm: VM): var GC = vm.gcInstance
 
 proc initializeCore(vm: VM) =
   let gc = vm.gc
-  var coreModule = gc.newModule(NullVal.asString)
-  gc.mapSet(vm.modules, NullVal, coreModule[].asVal)
+  let system = gc.newString("system")
+  gc.pushRoot system
+  let coreModule = gc.newModule(system)
+  gc.pushRoot coreModule
+  gc.mapSet(vm.modules, system.asVal, coreModule.asVal)
+  gc.popRoot coreModule
+  gc.popRoot system
 
-proc newVM*(initialHeapSize: int): VM =
-  result = create WrenVM
-  init(result.gcObj, initialHeapSize)
+proc newVM[GC,C](gc: GC, compiler: C): VM[GC,C] =
+  result = create WrenVM[GC,C]
+  result.gc = gc
+  result.compiler = compiler
   result.gc.newMap(result.modules) # TODO: mapClass is nil, as in original... hope it's OK
   result.initializeCore
 
@@ -33,16 +40,19 @@ proc loadModule(vm: VM, name: Value, source: cstring) =
   let gc = vm.gc
   var module = vm.getModule(name)
   if module == nil:
-    var newModule = gc.newModule(name.asString)
-    gc.mapSet(vm.modules, name, newModule[].asVal)
-    module = gc.release newModule
+    let newModule = gc.newModule(name.asString)
+    gc.pushRoot newModule    
+    gc.mapSet(vm.modules, name, newModule.asVal)
+    gc.popRoot newModule
 
+    let system = gc.newString("system")
+    gc.pushRoot system
     # Implicitly import the core module.
-    let coreModule = getModule(vm, NullVal)
-    for i in 0..<int(coreModule.variables.len):
+    let coreModule = getModule(vm, system.asVal)
+    for i in 0..<int(coreModule.variables.count):
       discard gc.defineVariable(module,
                           coreModule.variableNames[i].buffer,
                           coreModule.variableNames[i].length,
                           coreModule.variables[i])
 
-
+    gc.popRoot system

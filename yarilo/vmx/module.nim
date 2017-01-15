@@ -11,14 +11,14 @@ include map
 const 
   MaxModuleVars = 65536
 
-proc newModule*(gc: GC, name: ObjString): Rooted[ObjModule]  =
-  let module = gc.allocate(TModule)
-  module.name = name
-  result = gc.root(cast[ObjModule](module))
+proc newModule[GC](gc: GC, name: ObjString): ObjModule  =
+  result = cast[ObjModule](gc.allocate(TModule))
+  gc.initObj(result.obj, okModule)
+  result.name = name
 
-proc defineVariable(gc: GC, module: ObjModule, name: cstring,
+proc defineVariable[GC](gc: GC, module: ObjModule, name: cstring,
                        length: int, value: Value): int =
-  if module.variables.len == MaxModuleVars: 
+  if module.variables.count == MaxModuleVars: 
     return -2
 
   # See if the variable is already explicitly or implicitly declared.
