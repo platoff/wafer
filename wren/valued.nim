@@ -1,22 +1,26 @@
 
 
-template isUndefined*(val: Value): bool = val.kind == vkUndefined
-template isFalse*(val: Value): bool = val.kind == vkFalse
-template isObj*(val: Value): bool = val.kind == vkObj
-template isNum*(val: Value): bool = val.kind == vkNum
+proc isUndefined*(val: Value): bool = val.kind == vkUndefined
+proc isFalse*(val: Value): bool = val.kind == vkFalse
+proc isObj*(val: Value): bool = val.kind == vkObj
+proc isNum*(val: Value): bool = val.kind == vkNum
 
-proc NumVal(num: float64): Value =
+proc val*(num: float64): Value =
   result.kind = vkNum
   result.num = num
 
-converter asVal*(obj: Obj): Value {.inline.} =
+proc val*(obj: Obj): Value {.inline.} =
   assert obj != nil
   result.kind = vkObj
   result.obj = obj
 
 proc asObj*(val: Value): Obj =
-  assert val.kind == vkObj or val.kind == vkNull
+  assert val.kind == vkObj
   cast[Obj](val.obj)
+
+proc asNum*(val: Value): float64 =
+  assert val.kind == vkNum
+  val.num
 
 proc `===`(a, b: Value): bool =
   if a.kind != b.kind: false
@@ -36,7 +40,7 @@ proc hash(val: Value): uint32 =
   of vkObj: hash(val.asObj)
   else: 0u32
 
-proc internalGetClass(vm: WrenVM, value: Value): ObjClass =
+proc internalGetClass(vm: VM, value: Value): ObjClass =
   case value.kind:
   of vkFalse, vkTrue: vm.boolClass
   of vkNull: vm.nullClass
@@ -46,7 +50,7 @@ proc internalGetClass(vm: WrenVM, value: Value): ObjClass =
     nil
 
 var
-  UndefinedVal = Value(kind: vkUndefined, obj: nil)
+  UndefinedVal* = Value(kind: vkUndefined, obj: nil)
   FalseVal* = Value(kind: vkFalse, obj: nil)
   TrueVal* = Value(kind: vkTrue, obj: nil)
   NullVal* = Value(kind: vkNull, obj: nil)

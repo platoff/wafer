@@ -1,15 +1,19 @@
 
 
-import value
-import gc
+import model
+import compiler
 import vm
+import core
 
 import unittest
 
 suite "Data structures":
-  var gcObj: GCObj
-  init(gcObj, 65536)
-  let gc = cast[GC](addr gcObj)
+  let gc = create WrenVM
+  init(gc, 65536)
+
+  test "conversions":
+    #check val(nil) == NullVal
+    discard
 
   test "map set/get":
     let map = gc.newMap()
@@ -17,7 +21,7 @@ suite "Data structures":
     let str = gc.newString("Hello, World")
     gc.pushRoot str
 
-    gc.mapSet(map, NullVal, str.asVal)
+    gc.mapSet(map, NullVal, str.val)
     gc.popRoot str
     
     let val = map[NullVal]
@@ -33,10 +37,19 @@ suite "Data structures":
     gc.popRoot map
 
 suite "VM":
-  var gcObj: GCObj
-  init(gcObj, 65536)
-  let gc = addr gcObj
-  let vm = newVM(gc)
+  let wvm = create WrenVM
+  wvm.init(16 * 1024 * 1024)
+  wvm.initializeCore()
 
-  test "load module":
-    vm.loadModule(gc.newString("Hello, World").asVal, "xxx")
+#   test "2 + 2":
+#     check wvm.interpret("""
+
+# var yMin = 1
+# var yMax = 2
+# var xMin = 3
+# var xMax = 4
+
+# System.print(xMax)
+
+
+#     """) == CompileError

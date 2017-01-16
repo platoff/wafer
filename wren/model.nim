@@ -1,10 +1,10 @@
 
 type
   FlexibleArray{.unchecked.}[T] = array[0..0, T]
-  HugeArray*[T] = ptr FlexibleArray[T]
+  PArray*[T] = ptr FlexibleArray[T]
 
-  Buffer[T] = object
-    data: HugeArray[T]
+  Buffer*[T] = object
+    data*: PArray[T]
     count: uint32
     capacity: uint32
 
@@ -14,18 +14,12 @@ type
 
   SymbolTable* = Buffer[String]
 
-# proc isEqual[T](a, b: var FlexibleArray[T], length: int): bool =
-#   for i in 0..<length:
-#     if a[i] != b[i]:
-#       return false
-#   result = true
-
 when defined(NanTagging):
   type
     Value* = distinct uint64  
 else:
   type
-    ValueKind = enum
+    ValueKind* = enum
       vkFalse
       vkNull
       vkNum
@@ -34,7 +28,7 @@ else:
       vkUndefined
 
     Value* = object
-      case kind: ValueKind
+      case kind*: ValueKind
       of vkNum: num: float64
       else: obj: pointer
 
@@ -42,6 +36,13 @@ const
 # The maximum number of temporary objects that can be made visible to the GC
 # at one time.
   MaxTempRoots = 5
+  MaxVariableName* = 64
+# The maximum number of fields a class can have, including inherited fields.
+# This is explicit in the bytecode since `CODE_CLASS` and `CODE_SUBCLASS` take
+# a single byte for the number of fields. Note that it's 255 and not 256
+# because creating a class takes the *number* of fields, not the *highest
+# field index*.
+  MaxFields* = 255
 
 type
   ObjKind* = enum
@@ -52,10 +53,11 @@ type
     okFn
     okClosure
     okMap
+    okFiber
 
   Obj* = ptr TObj
   TObj = object
-    kind: ObjKind
+    kind*: ObjKind
     isDark: bool
     classObj*: ObjClass
     next: Obj # The next object in the linked list of all currently allocated objects.
@@ -65,7 +67,7 @@ type
     obj: TObj
     length: uint32
     hash: uint32
-    value: FlexibleArray[char]
+    value*: FlexibleArray[char]
 
   MapEntry = object
     key: Value
@@ -76,7 +78,7 @@ type
     obj: TObj
     capacity: uint32
     count: uint32
-    entries: HugeArray[MapEntry]
+    entries: PArray[MapEntry]
   
   ObjUpvalue = ptr TUpvalue
   TUpvalue = object
@@ -85,7 +87,7 @@ type
     closed: Value
     next: ObjUpValue
 
-  Primitive* = proc (vm: var WrenVM, args: HugeArray[Value]): bool {.nimcall.} 
+  Primitive* = proc (vm: VM, args: PArray[Value]): bool {.nimcall.} 
   ForeignMethodFn* = proc (vm: pointer) {.cdecl.} 
 
   ObjModule* = ptr TModule
@@ -95,15 +97,20 @@ type
     variableNames*: SymbolTable
     name*: ObjString
 
+  FnDebug = object
+    name*: cstring
+    sourceLines*: Buffer[int]
+
   ObjFn* = ptr TFn
   TFn = object
     obj: TObj
     code*: Buffer[byte]
     constants*: Buffer[Value]
-    module: ObjModule
-    maxSlots: int
+    module*: ObjModule
+    maxSlots*: int
     numUpvalues*: int
-    arity: int
+    arity*: int
+    debug*: ptr FnDebug 
 
   ObjClosure* = ptr TClosure
   TClosure = object
@@ -112,20 +119,20 @@ type
     upvalues: FlexibleArray[ObjUpvalue]
 
   CallFrame = object
-    ip: ptr byte
+    ip: PArray[byte]
     closure: ObjClosure
-    stackStart: ptr Value
+    stackStart: PArray[Value]
 
   ObjFiber* = ptr TFiber
   TFiber = object
     obj: TObj
-    stack: HugeArray[Value]
-    stackTop: ptr Value
+    stack: PArray[Value]
+    stackTop: PArray[Value]
     stackCapacity: int
-    frames: HugeArray[CallFrame]
+    frames: PArray[CallFrame]
     numFrames: int
     frameCapacity: int
-    openUpvalues: HugeArray[ObjUpvalue]
+    openUpvalues: PArray[ObjUpvalue]
     caller: ObjFiber
     error*: Value
     callerIsTrying: bool
@@ -160,7 +167,7 @@ type
   VM* = ptr WrenVM
   WrenVM* = object
     boolClass: ObjClass
-    classClass: ObjClass
+    classClass*: ObjClass
     fiberClass: ObjClass
     fnClass: ObjClass
     listClass: ObjClass
@@ -177,7 +184,7 @@ type
     nextGC: int
     first: Obj
 
-    gray: HugeArray[Obj]
+    gray: PArray[Obj]
     grayCount: int
     grayCapacity: int
 
@@ -187,13 +194,11 @@ type
     modules*: ObjMap  
     methodNames*: SymbolTable
 
-#
-# Allocator
-#
+    compiler*: pointer
 
-proc collectGarbage(vm: var WrenVM)
+proc collectGarbage(vm: VM)
 
-proc reallocate*(vm: var WrenVM, memory: pointer; oldSize, newSize: int): pointer {.inline.} =
+proc reallocate(vm: VM, memory: pointer; oldSize, newSize: int): pointer =
   inc vm.bytesAllocated, newSize - oldSize
   when defined(DebugGCStress):
     if newSize > 0:
@@ -204,31 +209,31 @@ proc reallocate*(vm: var WrenVM, memory: pointer; oldSize, newSize: int): pointe
 
   realloc(memory, newSize)
 
-proc deallocate(vm: var WrenVM, p: pointer, oldSize: int) {.inline.} = 
-  discard vm.reallocate(p, oldSize, 0)
+proc deallocate(vm: VM, p: pointer, oldSize = 0.Natural) = 
+  discard vm.reallocate( p, oldSize, 0)
 
-proc allocate(vm: var WrenVM, T: typedesc): ptr T {.inline.} = 
+proc allocate(vm: VM, T: typedesc): ptr T  = 
   result = cast[ptr T](vm.reallocate(nil, 0, sizeof T))
   zeroMem(result, sizeof T)
 
-proc allocate(vm: var WrenVM, T: typedesc, n: int): HugeArray[T] {.inline.} = 
-  cast[HugeArray[T]](vm.reallocate(nil, 0, n * sizeof T))
+proc allocate(vm: VM, T: typedesc, n: int): PArray[T] = 
+  cast[PArray[T]](vm.reallocate(nil, 0, n * sizeof T))
 
-proc allocateFlex(vm: var WrenVM, T: typedesc, I: typedesc, n: int): ptr T {.inline.} = 
+proc allocateFlex(vm: VM, T: typedesc, I: typedesc, n: int): ptr T = 
   cast[ptr T](vm.reallocate(nil, 0, sizeof(T) + n * sizeof I))
 
 #
 # Buffers
 #
 
-proc init(buf: var Buffer) =
+proc init*(buf: var Buffer) =
   buf.data = nil
   buf.count = 0
   buf.capacity = 0
 
 proc len*[T](buf: Buffer[T]): int {.inline.} = int(buf.count)
 
-proc clear(vm: var WrenVM, buf: var Buffer) =
+proc clear*(vm: VM, buf: var Buffer)  =
   vm.deallocate(buf.data, int(buf.capacity))
   buf.init
 
@@ -240,8 +245,6 @@ proc `[]=`*[T](buf: var Buffer[T], i: int, val: T) =
   assert i < int(buf.count)
   buf.data[i] = val
 
-proc data*[T](buf: Buffer[T]): HugeArray[T] {.inline.} = buf.data
-
 # From: http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2Float
 proc powerOf2Ceil(n: int): int =
   result = n - 1
@@ -252,17 +255,17 @@ proc powerOf2Ceil(n: int): int =
   result = result or (n shr 16)
   result = result + 1
 
-proc fill[T](vm: var WrenVM, buffer: var Buffer[T], value: T, count: int) =
+proc fill[T](vm: VM, buffer: var Buffer[T], value: T, count: int) =
   let newCount = int(buffer.count) + count
   if int(buffer.capacity) < newCount:
     let capacity = powerOf2Ceil(newCount)
     buffer.data = 
-      cast[HugeArray[T]](vm.reallocate(buffer.data, int(buffer.capacity) * sizeof(T), capacity * sizeof(T)))
+      cast[PArray[T]](vm.reallocate(buffer.data, int(buffer.capacity) * sizeof(T), capacity * sizeof(T)))
     for i in 0..<count:
       buffer.data[buffer.count] = value
       inc buffer.count
 
-proc add*[T](vm: var WrenVM, buffer: var Buffer[T], val: T) = vm.fill(buffer, val, 1)
+proc add*[T](vm: VM, buffer: var Buffer[T], val: T) = vm.fill(buffer, val, 1)
 
 #
 # Symbol Table
@@ -275,7 +278,7 @@ proc find*(table: SymbolTable, name: cstring, length: int): int =
         return i
   result = -1
 
-proc add*(vm: var WrenVM, symbols: var SymbolTable, name: cstring, length: int): int =
+proc add*(vm: VM, symbols: var SymbolTable, name: cstring, length: int): int =
   var symbol: String
   symbol.buffer = cast[cstring](vm.allocate(char, length + 1))
   copyMem(symbol.buffer, name, length)
@@ -284,7 +287,7 @@ proc add*(vm: var WrenVM, symbols: var SymbolTable, name: cstring, length: int):
   vm.add(symbols, symbol)
   result = int(symbols.count) - 1
 
-proc ensure*(vm: var WrenVM, symbols: var SymbolTable, name: cstring, length: int): int =
+proc ensure*(vm: VM, symbols: var SymbolTable, name: cstring, length: int): int =
   # See if the symbol is already defined.
   let existing = find(symbols, name, length)
   if existing != -1: 
@@ -296,14 +299,21 @@ proc ensure*(vm: var WrenVM, symbols: var SymbolTable, name: cstring, length: in
 ## R U N T I M E    V A L U E S
 ##
 
+type
+  ObjectType = ObjClosure | ObjFn | ObjString | ObjMap | ObjModule | ObjClass | Obj
+
+# Object Classes downcast
+converter objectDowncast*(obj: ObjectType): Obj {.inline.} = cast[Obj](obj)
 
 type
   DoubleBits = ptr array[2, uint32]
 
-proc hash(bits: DoubleBits): uint32 =
-  result = bits[0] xor bits[1]  
+proc slosh(u32: uint32): uint32 = 
+  result = u32
   result = result xor ((result shr 20) xor (result shr 12))
   result = result xor ((result shr 7) xor (result shr 4))
+
+proc hash(bits: DoubleBits): uint32 = slosh(bits[0] xor bits[1])
 
 proc hash(obj: Obj): uint32
 
@@ -312,31 +322,21 @@ when defined(NanTagging):
 else:
   include valued
 
-proc asVal*(b: bool): Value = 
+proc val*(b: bool): Value = 
   if b: TrueVal else: FalseVal
 
-
-type
-  ObjectType = ObjClosure | ObjFn | ObjString | ObjMap | ObjModule | ObjClass | Obj
-
-# Object Classes downcast
-proc asObj*(obj: ObjectType): Obj {.inline.} = cast[Obj](obj)
-
-converter asVal*(obj: ObjectType): Value {.inline.} = 
-  obj.asObj.asVal
+proc val*(i: int): Value = val(i.float64)
 
 proc vmcast*[T: ObjectType](val: Value): T =
   assert val.isObj
-  let obj = val.asObj
-  assert obj == nil or obj.kind == okString
-  result = cast[T](obj)
+  cast[T](val.asObj)
 
 proc isString*(value: Value): bool {.inline.} = 
   value.isObj and value.asObj.kind == okString
 proc isClass*(value: Value): bool {.inline.} = 
   value.isObj and value.asObj.kind == okClass
 
-proc getClass*(vm: WrenVM, value: Value): ObjClass {.inline.} =
+proc getClass*(vm: VM, value: Value): ObjClass {.inline.} =
   if value.isNum:
     vm.numClass
   elif value.isObj:
@@ -379,11 +379,21 @@ proc hash(obj: Obj): uint32 =
   case obj.kind
   of okString:
     cast[ObjString](obj).hash
+  of okClass:
+    # Classes just use their name.
+    cast[ObjClass](obj).name.hash
+    # Allow bare (non-closure) functions so that we can use a map to find
+    # existing constants in a function's constant table. This is only used
+    # internally. Since user code never sees a non-closure function, they
+    # cannot use them as map keys.
+  of okFN:
+    let fn = cast[ObjFn](obj)
+    slosh(fn.arity.uint32 * 31) xor slosh(fn.code.count)
   else:
-    assert false, "Only immutable objects can be hashed."
+    assert false, "Only immutable objects can be hashed: " & $obj.kind
     0
 
-proc initObj(vm: var WrenVM, obj: var TObj, kind: ObjKind, classObj: ObjClass) {.inline.} =
+proc initObj(vm: VM, obj: var TObj, kind: ObjKind, classObj: ObjClass) {.inline.} =
   obj.kind = kind
   obj.isDark = false
   obj.classObj = classObj
@@ -404,21 +414,21 @@ proc hashString(str: ObjString) =
 
   str.hash = uint32(hash)
 
-proc allocateString(vm: var WrenVM, length: int): ObjString {.inline.} =
+proc allocateString(vm: VM, length: int): ObjString {.inline.} =
   result = vm.allocateFlex(TString, char, length + 1)
   vm.initObj(result.obj, okString, vm.stringClass)
   result.length = uint32(length)
   result.value[length] = char(0)
 
-proc newString*(vm: var WrenVM, text: cstring, length: int): ObjString {.inline.} =
+proc newString*(vm: VM, text: cstring, length: int): ObjString  =
   assert(length == 0 or text != nil, "Unexpected null string.")
   result = vm.allocateString(length)
   if length > 0 and text != nil:
     copyMem(addr result.value[0], text, length)
   hashString(result)
 
-template newString*(a: untyped, text: cstring): ObjString = 
-  a.newString(text, text.len)
+proc newString*(vm: VM, text: cstring): ObjString =
+  vm.newString(text, text.len)
 
 proc c_value*(str: ObjString): cstring {.inline.} = cast[cstring](addr str.value[0])
 proc len*(str: ObjString): int {.inline.} = int(str.length)
@@ -426,7 +436,7 @@ proc len*(str: ObjString): int {.inline.} = int(str.length)
 template `$$`*(str: cstring): pointer = str.pointer
 template `$$`*(str: ObjString): pointer = str.pointer
 
-proc stringFormat*(vm: var WrenVM, format: cstring, values: varargs[pointer,`$$`]): ObjString =
+proc stringFormat*(vm: VM, format: cstring, values: varargs[pointer,`$$`]): ObjString  =
   # Calculate the length of the result string. Do this up front so we can
   # create the final string with a single allocation.
   var totalLength = 0
@@ -447,7 +457,7 @@ proc stringFormat*(vm: var WrenVM, format: cstring, values: varargs[pointer,`$$`
       inc totalLength
 
   # Concatenate the string.
-  result = allocateString(vm, totalLength)
+  result = vm.allocateString(totalLength)
 
   i = 0
   var dst = 0
@@ -485,11 +495,11 @@ const
 type
   PMapEntry = ptr MapEntry
 
-proc newMap*(vm: var WrenVM): ObjMap {.inline.} =
+proc newMap*(vm: VM): ObjMap =
   result = cast[ObjMap](vm.allocate(TMap))
   vm.initObj(result.obj, okMap, vm.mapClass)
 
-proc newMap*(vm: var WrenVM, map: var ObjMap) {.inline.} =
+proc newMap*(vm: VM, map: var ObjMap) =
   map = vm.newMap()
 
 # Looks for an entry with [key] in an array of [capacity] [entries].
@@ -497,7 +507,7 @@ proc newMap*(vm: var WrenVM, map: var ObjMap) {.inline.} =
 # If found, sets [result] to point to it and returns `true`. Otherwise,
 # returns `false` and points [result] to the entry where the key/value pair
 # should be inserted.
-proc findEntry(entries: HugeArray[MapEntry], capacity: int, 
+proc findEntry(entries: PArray[MapEntry], capacity: int, 
   key: Value, resultEntry: var PMapEntry): bool =
   # If there is no entry array (an empty map), we definitely won't find it.
   if capacity == 0:
@@ -551,7 +561,7 @@ proc findEntry(entries: HugeArray[MapEntry], capacity: int,
 # [capacity].
 # 
 # Returns `true` if this is the first time [key] was added to the map.
-proc insertEntry(entries: HugeArray[MapEntry], capacity: int; key, value: Value): bool {.inline.} =
+proc insertEntry(entries: PArray[MapEntry], capacity: int; key, value: Value): bool {.inline.} =
   var entry: PMapEntry
   if findEntry(entries, capacity, key, entry):
     # Already present, so just replace the value.
@@ -564,7 +574,7 @@ proc insertEntry(entries: HugeArray[MapEntry], capacity: int; key, value: Value)
     result = true;
 
 # Updates [map]'s entry array to [capacity].
-proc resizeMap(vm: var WrenVM, map: var TMap, capacity: int) {.inline.} =
+proc resizeMap(vm: VM, map: var TMap, capacity: int) {.inline.} =
   # Create the new empty hash table.
   let entries = vm.allocate(MapEntry, capacity)
   for i in 0..<capacity:
@@ -590,7 +600,7 @@ proc `[]`*(map: ObjMap, key: Value): Value {.inline.} =
   if findEntry(map.entries, int(map.capacity), key, entry): entry.value
   else: UndefinedVal
 
-proc mapSet*(vm: var WrenVM, map: ObjMap; key, value: Value) {.inline.} =
+proc mapSet*(vm: VM, map: ObjMap; key, value: Value) {.inline.} =
   # If the map is getting too full, make room first.
   if map.count + 1 > map.capacity * MapLoadPercent div 100:
     # Figure out the new hash table size.
@@ -599,50 +609,155 @@ proc mapSet*(vm: var WrenVM, map: ObjMap; key, value: Value) {.inline.} =
 
   if insertEntry(map.entries, int(map.capacity), key, value):
     inc map.count
-  
+
 ##
 ## M O D U L E S 
 ##
 
-proc newModule*(vm: var WrenVM, name: ObjString): ObjModule  =
+proc newModule*(vm: VM, name: ObjString): ObjModule  =
   result = cast[ObjModule](vm.allocate(TModule))
   vm.initObj(result.obj, okModule, nil)
   result.name = name
 
 ##
+## F U N C T I O N    A N D    C L O S U R E
+##
+
+proc newFunction*(vm: VM, module: ObjModule, maxSlots: int): ObjFn =
+  result = vm.allocate(TFn)
+  vm.initObj(result.obj, okFn, vm.fnClass)
+
+  result.debug = vm.allocate(FnDebug)
+  # debug->name = NULL;
+  # wrenIntBufferInit(&debug->sourceLines);
+  
+#  wrenValueBufferInit(&fn->constants);
+#  wrenByteBufferInit(&fn->code);
+  result.module = module
+  result.maxSlots = maxSlots
+  result.numUpvalues = 0
+  result.arity = 0
+#  fn->debug = debug;
+
+proc bindName*(vm: VM, fn: ObjFn, name: cstring, length: int) =
+  fn.debug.name = cast[cstring](vm.allocate(char, length + 1))
+  copyMem(fn.debug.name, name, length)
+  fn.debug.name[length] = '\0'
+
+proc newClosure*(vm: VM, fn: ObjFn): ObjClosure =
+  result = vm.allocateFlex(TClosure, ObjUpvalue, fn.numUpvalues)
+  vm.initObj(result.obj, okClosure, vm.fnClass)
+  result.fn = fn
+  # Clear the upvalue array. We need to do this in case a GC is triggered
+  # after the closure is created but before the upvalue array is populated.
+  for i in 0..<fn.numUpvalues:
+    result.upvalues[i] = nil
+
+##
+## F I B E R
+##
+
+const 
+# The number of call frames initially allocated when a fiber is created. Making
+# this smaller makes fibers use less memory (at first) but spends more time
+# reallocating when the call stack grows.
+  INITIAL_CALL_FRAMES = 4
+
+# Adds a new [CallFrame] to [fiber] invoking [closure] whose stack starts at
+# [stackStart].
+proc appendCallFrame(vm: VM, fiber: ObjFiber,
+                     closure: ObjClosure, stackStart: PArray[Value]) =
+  # The caller should have ensured we already have enough capacity.
+  assert (fiber.frameCapacity > fiber.numFrames, "No memory for call frame.")
+  
+  let frame = addr fiber.frames[fiber.numFrames]
+  inc fiber.numFrames
+  frame.stackStart = stackStart
+  frame.closure = closure
+  frame.ip = closure.fn.code.data
+
+proc reset(vm: VM, fiber: ObjFiber, closure: ObjClosure) =
+  # Push the stack frame for the function.
+  fiber.stackTop = fiber.stack
+  fiber.openUpvalues = nil
+  fiber.caller = nil
+  fiber.error = NullVal
+  fiber.callerIsTrying = false
+  fiber.numFrames = 0
+
+  # Initialize the first call frame.
+  if closure != nil:
+    vm.appendCallFrame(fiber, closure, fiber.stack)
+
+proc newFiber*(vm: VM, closure: ObjClosure): ObjFiber =
+  # Allocate the arrays before the fiber in case it triggers a GC.
+  let frames = vm.allocate(CallFrame, INITIAL_CALL_FRAMES)
+  
+  # Add one slot for the unused implicit receiver slot that the compiler
+  # assumes all functions have.
+  let stackCapacity = if closure == nil:
+        1
+      else: 
+        powerOf2Ceil(closure.fn.maxSlots + 1)
+  let stack = vm.allocate(Value, stackCapacity)
+  
+  result = vm.allocate(TFiber)
+  vm.initObj(result.obj, okFiber, vm.fiberClass)
+  result.frames = frames
+  result.frameCapacity = INITIAL_CALL_FRAMES
+  result.stack = stack
+  result.stackCapacity = stackCapacity
+  vm.reset(result, closure)
+
+##
 ## C L A S S E S
 ##
 
-proc newSingleClass*(vm: var WrenVM, numFields: int, name: ObjString): ObjClass =
+proc newSingleClass*(vm: VM, numFields: int, name: ObjString): ObjClass  =
   result = vm.allocate(TClass)
   initObj(vm, result.obj, okClass, nil)
   result.numFields = numFields
   result.name = name
 
-proc bindMethod*(vm: var WrenVM, classObj: ObjClass, symbol: int, meth: Method) =
+proc bindMethod*(vm: VM, classObj: ObjClass, symbol: int, meth: Method) =
   # Make sure the buffer is big enough to contain the symbol's index.
   if symbol >= classObj.methods.len:
     var noMethod: Method
     noMethod.kind = METHOD_NONE
-    vm.fill(classObj.methods, noMethod,
-                         symbol - classObj.methods.len + 1)
+    vm.fill(classObj.methods, noMethod, symbol - classObj.methods.len + 1)
 
   classObj.methods[symbol] = meth
+
+proc bindSuperclass*(vm: VM, subclass: ObjClass, superclass: ObjClass) =
+  assert(superclass != nil, "Must have superclass.")
+
+  subclass.superclass = superclass
+
+  # Include the superclass in the total number of fields.
+  if subclass.numFields != -1:
+    inc subclass.numFields, superclass.numFields
+  else:
+    assert(superclass.numFields == 0,
+           "A foreign class cannot inherit from a class with fields.")
+
+  # Inherit methods from its superclass.
+  for i in 0..<superclass.methods.len:
+    vm.bindMethod(subclass, i, superclass.methods.data[i])
 
 ##
 ## G A R B A G E    C O L L E C T O R
 ##
 
-proc pushRoot*(vm: var WrenVM, obj: ObjectType) {.inline.} =
+proc pushRoot*(vm: VM, obj: Obj)  =
   assert vm.numTempRoots < MaxTempRoots
   vm.tempRoots[vm.numTempRoots] = cast[Obj](obj)
   inc vm.numTempRoots
 
-proc popRoot*(vm: var WrenVM, obj: ObjectType) {.inline.} = 
+proc popRoot*(vm: VM, obj: Obj)  = 
   dec vm.numTempRoots
   assert vm.tempRoots[vm.numTempRoots].pointer == obj.pointer
 
-proc grayObj(vm: var WrenVM, obj: Obj) =
+proc grayObj(vm: VM, obj: Obj) =
   if obj == nil: return
 
   # Stop if the object is already darkened so we don't get stuck in a cycle.
@@ -655,16 +770,16 @@ proc grayObj(vm: var WrenVM, obj: Obj) =
   # more marks later.
   if vm.grayCount >= vm.grayCapacity:
     vm.grayCapacity = vm.grayCount * 2
-    vm.gray = cast[HugeArray[Obj]](realloc(vm.gray, vm.grayCapacity * sizeof(Obj)))
+    vm.gray = cast[PArray[Obj]](realloc(vm.gray, vm.grayCapacity * sizeof(Obj)))
 
   vm.gray[vm.grayCount] = obj
   inc vm.grayCount
 
-proc grayValue(vm: var WrenVM, value: Value) =
+proc grayValue(vm: VM, value: Value) =
   if isObj(value):
     vm.grayObj(value.asObj)
 
-proc blacken(vm: var WrenVM, module: ObjModule) =
+proc blacken(vm: VM, module: ObjModule) =
   # Top-level variables.
   for i in 0..<module.variables.len:
     vm.grayValue(module.variables.data[i])
@@ -675,11 +790,11 @@ proc blacken(vm: var WrenVM, module: ObjModule) =
   inc vm.bytesAllocated, sizeof(TModule)
   # TODO: Track memory for symbol table and buffer.
 
-proc blacken(vm: var WrenVM, str: ObjString) =
+proc blacken(vm: VM, str: ObjString) =
   # Keep track of how much memory is still in use.
   inc vm.bytesAllocated,  sizeof(TString) + str.len + 1
 
-proc blackenObject(vm: var WrenVM, obj: Obj) =
+proc blackenObject(vm: VM, obj: Obj) =
   # Traverse the object's fields.
   case obj.kind:
     #of okClass: vm.blacken(cast[ObjClass](obj))
@@ -687,21 +802,21 @@ proc blackenObject(vm: var WrenVM, obj: Obj) =
     of okModule: vm.blacken(cast[ObjModule](obj))
     else: assert false, "not implemented"
 
-proc blackenObjects(vm: var WrenVM) =
+proc blackenObjects(vm: VM) =
   while vm.grayCount > 0:
     # Pop an item from the gray stack.
     dec vm.grayCount
     let obj = vm.gray[vm.grayCount]
     blackenObject(vm, obj)
 
-proc freeObj(vm: var WrenVM, obj: Obj) =
+proc freeObj(vm: VM, obj: Obj) =
   case obj.kind:
   of okMap:
     vm.deallocate(cast[ObjMap](obj).entries, 0)
   else:
     assert false, "not implemented"
 
-proc collectGarbage(vm: var WrenVM) =
+proc collectGarbage(vm: VM) =
   vm.bytesAllocated = 0
   vm.grayObj(cast[Obj](vm.modules))
   for i in 0..<vm.numTempRoots:
@@ -735,9 +850,82 @@ proc collectGarbage(vm: var WrenVM) =
 ## V M
 ##
 
-proc init*(vm: var WrenVM, initialHeapSize: int) =
+const 
+# The maximum number of arguments that can be passed to a method. Note that
+# this limitation is hardcoded in other places in the VM, in particular, the
+# `CODE_CALL_XX` instructions assume a certain maximum number.
+  MAX_PARAMETERS* = 16
+
+# The maximum name of a method, not including the signature. This is an
+# arbitrary but enforced maximum just so we know how long the method name
+# strings need to be in the parser.
+  MAX_METHOD_NAME* = 64
+
+# The maximum length of a method signature. Signatures look like:
+#
+#     foo        // Getter.
+#     foo()      // No-argument method.
+#     foo(_)     // One-argument method.
+#     foo(_,_)   // Two-argument method.
+#     init foo() // Constructor initializer.
+#
+# The maximum signature length takes into account the longest method name, the
+# maximum number of parameters with separators between them, "init ", and "()".
+  MAX_METHOD_SIGNATURE* = (MAX_METHOD_NAME + (MAX_PARAMETERS * 2) + 6)
+
+# The maximum number of module-level variables that may be defined at one time.
+# This limitation comes from the 16 bits used for the arguments to
+# `CODE_LOAD_MODULE_VAR` and `CODE_STORE_MODULE_VAR`.
+  MaxModuleVars = 65536
+# The maximum number of arguments that can be passed to a method. Note that
+# this limitation is hardcoded in other places in the VM, in particular, the
+# `CODE_CALL_XX` instructions assume a certain maximum number.  
+  #MaxParameters* = 16
+# The maximum name of a method, not including the signature. This is an
+# arbitrary but enforced maximum just so we know how long the method name
+# strings need to be in the parser.
+#  MaxMethodName* = 64
+
+proc init*(vm: VM, initialHeapSize: int) =
   vm.grayCount = 0
   vm.grayCapacity = 4
   vm.nextGC = initialHeapSize
   vm.numTempRoots = 0
   vm.newMap(vm.modules) # TODO: mapClass is nil, as in original... hope it's OK
+
+proc defineVariable*(vm: VM, module: ObjModule, name: cstring,
+                     length: int, value: Value): int =
+  assert module != nil
+  if module.variables.len == MaxModuleVars: 
+    return -2
+
+  if value.isObj:
+    vm.pushRoot(value.asObj)  # TODO: do we need this here?
+
+  # See if the variable is already explicitly or implicitly declared.
+  result = module.variableNames.find(name, length)
+  if result == -1:
+    # Brand new variable.
+    result = vm.add(module.variableNames, name, length)
+    vm.add(module.variables, value)
+  elif isNum(module.variables[result]):
+    ## An implicitly declared variable's value will always be a number. Now we
+    ## have a real definition.
+    module.variables[result] = value
+  else:
+    # Already explicitly declared.
+    result = -1
+
+  if value.isObj:
+    vm.popRoot(value.asObj)
+
+proc declareVariable*(vm: VM, module: ObjModule, name: cstring,
+                        length: int, line: int): int =
+  if module.variables.len == MAX_MODULE_VARS: 
+    return -2
+
+  # Implicitly defined variables get a "value" that is the line where the
+  # variable is first used. We'll use that later to report an error on the
+  # right line.
+  vm.add(module.variables, line.val)
+  return vm.add(module.variableNames, name, length)

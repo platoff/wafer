@@ -9,21 +9,27 @@ const
   QNAN = 0x7ffc000000000000u64
 
 # Tag values for the different singleton values.
-  TAG_NAN = 0u64
-  TAG_NULL = 1u64
-  TAG_FALSE = 2u64
-  TAG_TRUE = 3u64
-  TAG_UNDEFINED = 4u64
+type 
+  Tag = enum
+    tagNAN = 0
+    tagNull = 1
+    tagFalse = 2
+    tagTrue = 3
+    tagUndefined = 4
+    tagUnused5, tagUnused6, tagUnused7
 
+const
 # Singleton values.
-  NullVal* = Value(QNAN or TAG_NULL)
-  FalseVal* = Value(QNAN or TAG_FALSE)
-  TrueVal* = Value(QNAN or TAG_TRUE)
-  UndefinedVal = Value(QNAN or TAG_UNDEFINED)
+  NullVal* = Value(QNAN or tagNull.uint64)
+  FalseVal* = Value(QNAN or tagFalse.uint64)
+  TrueVal* = Value(QNAN or tagTrue.uint64)
+  UndefinedVal = Value(QNAN or tagUndefined.uint64)
 
 # Masks out the tag bits used to identify the singleton value.
-  MaskTag = 7u64
+  MaskTag: int = 7
   
+proc getTag(value: Value): Tag = Tag(int(value) and MaskTag)
+
 # If the NaN bits are set, it's not a number.
 template isNum(value: Value): bool = ((uint64(value) and QNAN) != QNAN)
 
@@ -50,6 +56,15 @@ proc hash(value: Value): uint32 =
   else:
     var val = uint64(value)
     result = hash(cast[DoubleBits](addr val))
+
+proc internalGetClass(vm: WrenVM, value: Value): ObjClass =
+  case value.getTag:
+  of tagFalse, tagTrue: vm.boolClass
+  of tagNAN: vm.numClass
+  of tagNull: vm.nullClass
+  else: 
+    assert false, "unreachable"
+    nil
 
 
 #// Gets the singleton type tag for a Value (which must be a singleton).
