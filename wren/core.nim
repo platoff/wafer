@@ -1,8 +1,6 @@
 
-#import value
 import model
 import vm
-import compiler
 
 proc defineClass(vm: VM, module: ObjModule, name: cstring): ObjClass =
   let nameString = vm.newString(name)

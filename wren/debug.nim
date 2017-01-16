@@ -6,19 +6,12 @@ proc `$`(str: ObjString): string =
   if str == nil or str.value == nil: "<nil>" else: $str.c_value
 
 proc `$`(obj: Obj): string =
-  "[" & $obj.kind & "]"
+  "of class [" & $obj.kind & "]"
 
-when not defined(NanTagging):
-  proc `$`(value: Value): string =
-    case value.kind:
-    of vkFalse: "false"
-    of vkNull: "null"
-    of vkNum: $asNum(value)
-    of vkTrue: "true"
-    of vkObj: $value.asObj
-    else: 
-      assert false, "unreachable"
-      "unreacheable"
+proc `$`(val: Value): string =
+  if val.isObj: $val.asObj
+  elif val.isNum: $val.asNum
+  else: "<value>"
 
 proc dumpInstruction(vm: VM, fn: ObjFn, start: int, lastLine: var int): int =
   var i = start
@@ -27,7 +20,7 @@ proc dumpInstruction(vm: VM, fn: ObjFn, start: int, lastLine: var int): int =
 
   let line = fn.debug.sourceLines.data[i]
   if lastLine != line:
-    write(stdout, $line & ":\n")
+    write(stdout, "#" & $line & ":\n")
     lastLine = line
 
   write(stdout, $i)
@@ -71,12 +64,12 @@ proc dumpInstruction(vm: VM, fn: ObjFn, start: int, lastLine: var int): int =
   of CODE_LOAD_MODULE_VAR:
     let slot = READ_SHORT()
     echo "LOAD_MODULE_VAR ", slot, " ",
-           fn.module.variableNames.data[slot]
+           fn.module.variableNames.data[slot].buffer
 
   of CODE_STORE_MODULE_VAR:
     let slot = READ_SHORT()
     echo "STORE_MODULE_VAR ", slot, " ",
-           fn.module.variableNames.data[slot]
+           fn.module.variableNames.data[slot].buffer
 
   of CODE_LOAD_FIELD_THIS: BYTE_INSTRUCTION("LOAD_FIELD_THIS")
   of CODE_STORE_FIELD_THIS: BYTE_INSTRUCTION("STORE_FIELD_THIS")
@@ -169,11 +162,11 @@ proc dumpInstruction(vm: VM, fn: ObjFn, start: int, lastLine: var int): int =
   of CODE_FOREIGN_CLASS: echo "FOREIGN_CLASS"
   of CODE_METHOD_INSTANCE:
     let symbol = READ_SHORT()
-    echo "METHOD_INSTANCE ", symbol,
+    echo "METHOD_INSTANCE ", symbol, " ",
             vm.methodNames.data[symbol].buffer
   of CODE_METHOD_STATIC:
     let symbol = READ_SHORT()
-    echo "METHOD_STATIC ", symbol,
+    echo "METHOD_STATIC ", symbol, " ",
             vm.methodNames.data[symbol].buffer
   of CODE_END: echo "END"
   else:

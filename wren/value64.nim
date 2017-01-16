@@ -23,7 +23,7 @@ const
   NullVal* = Value(QNAN or tagNull.uint64)
   FalseVal* = Value(QNAN or tagFalse.uint64)
   TrueVal* = Value(QNAN or tagTrue.uint64)
-  UndefinedVal = Value(QNAN or tagUndefined.uint64)
+  UndefinedVal* = Value(QNAN or tagUndefined.uint64)
 
 # Masks out the tag bits used to identify the singleton value.
   MaskTag: int = 7
@@ -31,11 +31,10 @@ const
 proc getTag(value: Value): Tag = Tag(int(value) and MaskTag)
 
 # If the NaN bits are set, it's not a number.
-template isNum(value: Value): bool = ((uint64(value) and QNAN) != QNAN)
+template isNum*(value: Value): bool = ((uint64(value) and QNAN) != QNAN)
 
 # An object pointer is a NaN with a set sign bit.
 template isObj*(value: Value): bool = ((uint64(value) and (QNAN or SIGN_BIT)) == (QNAN or SIGN_BIT))
-
 template isFalse*(value: Value): bool = uint64(value) == uint64(FalseVal)
 template isNull*(value: Value): bool = uint64(value) == uint64(NullVal)
 template isUndefined*(value: Value): bool = uint64(value) == uint64(UndefinedVal)
@@ -45,8 +44,10 @@ template asBool(value: Value): bool = ((value) == TrueVal)
 
 # Value -> Obj.
 template asObj*(value: Value): Obj = cast[Obj](uint64(value) and (not (SIGN_BIT or QNAN)))
+template asNum*(value: Value): float64 = cast[float64](uint64(value))
 
-converter asVal*(obj: Obj): Value {.inline.} = Value(SIGN_BIT or QNAN or cast[uint64](obj))
+proc val*(obj: Obj): Value {.inline.} = Value(SIGN_BIT or QNAN or cast[uint64](obj))
+proc val*(num: float64): Value {.inline.} = cast[Value](num)
 
 proc `===`(a, b: Value): bool = uint64(a) == uint64(b)
 
@@ -57,7 +58,7 @@ proc hash(value: Value): uint32 =
     var val = uint64(value)
     result = hash(cast[DoubleBits](addr val))
 
-proc internalGetClass(vm: WrenVM, value: Value): ObjClass =
+proc internalGetClass(vm: VM, value: Value): ObjClass =
   case value.getTag:
   of tagFalse, tagTrue: vm.boolClass
   of tagNAN: vm.numClass
@@ -65,7 +66,6 @@ proc internalGetClass(vm: WrenVM, value: Value): ObjClass =
   else: 
     assert false, "unreachable"
     nil
-
 
 #// Gets the singleton type tag for a Value (which must be a singleton).
 #define GET_TAG(value) ((int)((value) & MASK_TAG))

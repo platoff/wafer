@@ -1,7 +1,6 @@
 
 import model
 import opcodes
-import debug 
 
 const
   MaxInterpolationNesting = 8
@@ -921,6 +920,9 @@ proc resolveName(compiler: Compiler, name: cstring, length: int): Variable =
     result.index = 
       find(compiler.parser.module.variableNames, name, length)
 
+when not defined(release):
+  include debug
+
 proc loadLocal(compiler: Compiler, slot: int) =
   if slot <= 8:
     emitOp(compiler, (Code)(CODE_LOAD_LOCAL_0.int + slot))
@@ -964,7 +966,7 @@ proc endCompiler(compiler: Compiler,
   # Pop this compiler off the stack.
   compiler.parser.vm.compiler = compiler.parent
   
-  when true: #defined(DebugDumpCompiledCode):
+  when not defined(release):
     dumpCode(compiler.parser.vm, compiler.fn)
 
   result = compiler.fn

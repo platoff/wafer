@@ -1,6 +1,5 @@
 
 import model
-import opcodes
 import compiler
 
 # Looks up the previously loaded module with [name].
@@ -14,7 +13,6 @@ proc getModule*(vm: VM, name: Value): ObjModule =
 proc loadModule*(vm: VM, name: Value, source: cstring): ObjFiber =
   var module = vm.getModule(name)
   if module == nil:
-    echo "module not found"
     module = vm.newModule(vmcast[ObjString](name))
     vm.pushRoot module
     vm.mapSet(vm.modules, name, module.val)
@@ -55,37 +53,37 @@ proc findForeignMethod(vm: VM; moduleName, className: cstring;
 #
 # Aborts the current fiber if the method is a foreign method that could not be
 # found.
-proc bindMethod(vm: VM, methodType: int, symbol: int,
-                module: ObjModule, clazz: ObjClass, methodValue: Value) =
-  let classObj = 
-    if methodType == CODE_METHOD_STATIC.int:
-      clazz.obj.classObj
-    else:
-      clazz
-  let className = classObj.name.c_value
+# proc bindMethod(vm: VM, methodType: int, symbol: int,
+#                 module: ObjModule, clazz: ObjClass, methodValue: Value) =
+#   let classObj = 
+#     if methodType == CODE_METHOD_STATIC.int:
+#       clazz.obj.classObj
+#     else:
+#       clazz
+#   let className = classObj.name.c_value
 
-  var meth: Method
-  if methodValue.isString:
-    let name = vmcast[ObjString](methodValue).c_value
-    meth.kind = METHOD_FOREIGN
-    meth.foreign = vm.findForeignMethod(module.name.c_value,
-                                          className,
-                                          methodType == CODE_METHOD_STATIC.int,
-                                          name)
+#   var meth: Method
+#   if methodValue.isString:
+#     let name = vmcast[ObjString](methodValue).c_value
+#     meth.kind = METHOD_FOREIGN
+#     meth.foreign = vm.findForeignMethod(module.name.c_value,
+#                                           className,
+#                                           methodType == CODE_METHOD_STATIC.int,
+#                                           name)
 
-    if meth.foreign == nil:
-      vm.fiber.error = stringFormat(vm, 
-        "Could not find foreign method '@' for class $ in module '$'.").val
-      # ,
-      #      methodValue, classObj.name.c_value, module.name.c_value)
-  else:
-    meth.kind = METHOD_BLOCK
-    meth.obj = vmcast[ObjClosure](methodValue)
+#     if meth.foreign == nil:
+#       vm.fiber.error = stringFormat(vm, 
+#         "Could not find foreign method '@' for class $ in module '$'.").val
+#       # ,
+#       #      methodValue, classObj.name.c_value, module.name.c_value)
+#   else:
+#     meth.kind = METHOD_BLOCK
+#     meth.obj = vmcast[ObjClosure](methodValue)
 
-    # Patch up the bytecode now that we know the superclass.
-    bindMethodCode(classObj, meth.obj.fn)
+#     # Patch up the bytecode now that we know the superclass.
+#     bindMethodCode(classObj, meth.obj.fn)
 
-  bindMethod(vm, classObj, symbol, meth)
+#   bindMethod(vm, classObj, symbol, meth)
 
 type 
   InterpretResult* = enum

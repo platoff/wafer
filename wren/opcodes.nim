@@ -130,47 +130,44 @@ proc getNumArguments*(bytecode: PArray[byte], constants: PArray[Value], ip: int)
 
     # There are two bytes for the constant, then two for each upvalue.
     2 + (loadedFn.numUpvalues * 2)
-  else:
-    assert false, "unreachable"
-    0
 
-proc bindMethodCode*(classObj: ObjClass, fn: ObjFn) =
-  var ip = 0
-  while true:
-    let instruction = (Code)fn.code[ip]
-    inc ip
-    case instruction:
-    of CODE_LOAD_FIELD, CODE_STORE_FIELD, 
-      CODE_LOAD_FIELD_THIS, CODE_STORE_FIELD_THIS:
-        # Shift this class's fields down past the inherited ones. We don't
-        # check for overflow here because we'll see if the number of fields
-        # overflows when the subclass is created.
-        fn.code[ip] = byte(fn.code[ip].int + classObj.superclass.numFields)
-        inc ip
+# proc bindMethodCode*(classObj: ObjClass, fn: ObjFn) =
+#   var ip = 0
+#   while true:
+#     let instruction = (Code)fn.code[ip]
+#     inc ip
+#     case instruction:
+#     of CODE_LOAD_FIELD, CODE_STORE_FIELD, 
+#       CODE_LOAD_FIELD_THIS, CODE_STORE_FIELD_THIS:
+#         # Shift this class's fields down past the inherited ones. We don't
+#         # check for overflow here because we'll see if the number of fields
+#         # overflows when the subclass is created.
+#         fn.code[ip] = byte(fn.code[ip].int + classObj.superclass.numFields)
+#         inc ip
 
-    of CODE_SUPER_0, CODE_SUPER_1, CODE_SUPER_2, CODE_SUPER_3,
-       CODE_SUPER_4, CODE_SUPER_5, CODE_SUPER_6, CODE_SUPER_7,
-       CODE_SUPER_8, CODE_SUPER_9, CODE_SUPER_10, CODE_SUPER_11,
-       CODE_SUPER_12, CODE_SUPER_13, CODE_SUPER_14, CODE_SUPER_15,
-       CODE_SUPER_16:
-        # Skip over the symbol.
-        inc ip, 2
+#     of CODE_SUPER_0, CODE_SUPER_1, CODE_SUPER_2, CODE_SUPER_3,
+#        CODE_SUPER_4, CODE_SUPER_5, CODE_SUPER_6, CODE_SUPER_7,
+#        CODE_SUPER_8, CODE_SUPER_9, CODE_SUPER_10, CODE_SUPER_11,
+#        CODE_SUPER_12, CODE_SUPER_13, CODE_SUPER_14, CODE_SUPER_15,
+#        CODE_SUPER_16:
+#         # Skip over the symbol.
+#         inc ip, 2
         
-        # Fill in the constant slot with a reference to the superclass.
-        let constant = (fn.code[ip].int shl 8) or fn.code[ip + 1].int
-        fn.constants[constant] = val(classObj.superclass)
+#         # Fill in the constant slot with a reference to the superclass.
+#         let constant = (fn.code[ip].int shl 8) or fn.code[ip + 1].int
+#         fn.constants[constant] = val(classObj.superclass)
 
-    of CODE_CLOSURE:
-        # Bind the nested closure too.
-        let constant = (fn.code[ip].int shl 8) or fn.code[ip + 1].int
-        bindMethodCode(classObj, vmcast[ObjFn](fn.constants[constant]))
-        inc ip, getNumArguments(fn.code.data, fn.constants.data, ip - 1)
+#     of CODE_CLOSURE:
+#         # Bind the nested closure too.
+#         let constant = (fn.code[ip].int shl 8) or fn.code[ip + 1].int
+#         bindMethodCode(classObj, vmcast[ObjFn](fn.constants[constant]))
+#         inc ip, getNumArguments(fn.code.data, fn.constants.data, ip - 1)
 
-    of CODE_END:
-        break
+#     of CODE_END:
+#         break
 
-    else:
-        # Other instructions are unaffected, so just skip over them.
-        inc ip, getNumArguments(fn.code.data, fn.constants.data, ip - 1)
+#     else:
+#         # Other instructions are unaffected, so just skip over them.
+#         inc ip, getNumArguments(fn.code.data, fn.constants.data, ip - 1)
 
 
