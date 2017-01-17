@@ -198,7 +198,7 @@ type
 
 proc collectGarbage(vm: VM)
 
-proc reallocate(vm: VM, memory: pointer; oldSize, newSize: int): pointer =
+proc reallocate(vm: VM, memory: pointer; oldSize, newSize: int): pointer {.inline.} =
   inc vm.bytesAllocated, newSize - oldSize
   when defined(DebugGCStress):
     if newSize > 0:
@@ -209,17 +209,17 @@ proc reallocate(vm: VM, memory: pointer; oldSize, newSize: int): pointer =
 
   realloc(memory, newSize)
 
-proc deallocate(vm: VM, p: pointer, oldSize = 0.Natural) = 
+proc deallocate(vm: VM, p: pointer, oldSize = 0.Natural) {.inline.} =
   discard vm.reallocate( p, oldSize, 0)
 
-proc allocate(vm: VM, T: typedesc): ptr T  = 
+proc allocate(vm: VM, T: typedesc): ptr T  {.inline.} =
   result = cast[ptr T](vm.reallocate(nil, 0, sizeof T))
   zeroMem(result, sizeof T)
 
-proc allocate(vm: VM, T: typedesc, n: int): PArray[T] = 
+proc allocate(vm: VM, T: typedesc, n: int): PArray[T] {.inline.} =
   cast[PArray[T]](vm.reallocate(nil, 0, n * sizeof T))
 
-proc allocateFlex(vm: VM, T: typedesc, I: typedesc, n: int): ptr T = 
+proc allocateFlex(vm: VM, T: typedesc, I: typedesc, n: int): ptr T {.inline.} =
   cast[ptr T](vm.reallocate(nil, 0, sizeof(T) + n * sizeof I))
 
 #
@@ -231,9 +231,9 @@ proc init*(buf: var Buffer) =
   buf.count = 0
   buf.capacity = 0
 
-proc len*[T](buf: Buffer[T]): int {.inline.} = int(buf.count)
+template len*[T](buf: Buffer[T]): int = int(buf.count)
 
-proc clear*(vm: VM, buf: var Buffer)  =
+proc clear*(vm: VM, buf: var Buffer) {.inline.} =
   vm.deallocate(buf.data, int(buf.capacity))
   buf.init
 
@@ -241,31 +241,37 @@ proc `[]`*[T](buf: Buffer[T], i: int): T {.inline.} =
   assert i < int(buf.count)
   buf.data[i]
   
-proc `[]=`*[T](buf: var Buffer[T], i: int, val: T) = 
+proc `[]=`*[T](buf: var Buffer[T], i: int, val: T) {.inline.} = 
   assert i < int(buf.count)
   buf.data[i] = val
 
 # From: http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2Float
-proc powerOf2Ceil(n: int): int =
-  result = n - 1
-  result = result or (n shr 1)
-  result = result or (n shr 2)
-  result = result or (n shr 4)
-  result = result or (n shr 8)
-  result = result or (n shr 16)
-  result = result + 1
+# proc powerOf2Ceil(n: uint32): uint32 =
+#   result = n - 1
+#   result = result or (n shr 1)
+#   result = result or (n shr 2)
+#   result = result or (n shr 4)
+#   result = result or (n shr 8)
+#   result = result or (n shr 16)
+#   result = result + 1
 
-proc fill[T](vm: VM, buffer: var Buffer[T], value: T, count: int) =
+proc fill[T](vm: VM, buffer: var Buffer[T], value: T, count: int) {.inline.} =
   let newCount = int(buffer.count) + count
-  if int(buffer.capacity) < newCount:
-    let capacity = powerOf2Ceil(newCount)
+  var capacity = int(buffer.capacity)
+  if capacity < newCount:  
+    while true:
+      if capacity == 0: capacity = 4
+      else: capacity = capacity * 2
+      if capacity >= newCount:
+        break
     buffer.data = 
-      cast[PArray[T]](vm.reallocate(buffer.data, int(buffer.capacity) * sizeof(T), capacity * sizeof(T)))
-    for i in 0..<count:
-      buffer.data[buffer.count] = value
-      inc buffer.count
+      cast[PArray[T]](
+        vm.reallocate(buffer.data, int(buffer.capacity) * sizeof(T), capacity * sizeof(T)))
+  for i in 0..<count:
+    buffer.data[buffer.count] = value
+    inc buffer.count
 
-proc add*[T](vm: VM, buffer: var Buffer[T], val: T) = vm.fill(buffer, val, 1)
+proc add*[T](vm: VM, buffer: var Buffer[T], val: T) {.inline.} = vm.fill(buffer, val, 1)
 
 #
 # Symbol Table
@@ -322,10 +328,10 @@ when defined(NanTagging):
 else:
   include valued
 
-proc val*(b: bool): Value = 
+template val*(b: bool): Value = 
   if b: TrueVal else: FalseVal
 
-proc val*(i: int): Value = val(i.float64)
+template val*(i: int): Value = val(i.float64)
 
 proc vmcast*[T: ObjectType](val: Value): T =
   assert val.isObj
@@ -430,8 +436,8 @@ proc newString*(vm: VM, text: cstring, length: int): ObjString  =
 proc newString*(vm: VM, text: cstring): ObjString =
   vm.newString(text, text.len)
 
-proc c_value*(str: ObjString): cstring {.inline.} = cast[cstring](addr str.value[0])
-proc len*(str: ObjString): int {.inline.} = int(str.length)
+template c_value*(str: ObjString): cstring = cast[cstring](addr str.value[0])
+template len*(str: ObjString): int = int(str.length)
 
 template `$$`*(str: cstring): pointer = str.pointer
 template `$$`*(str: ObjString): pointer = str.pointer
@@ -698,7 +704,7 @@ proc newFiber*(vm: VM, closure: ObjClosure): ObjFiber =
   let stackCapacity = if closure == nil:
         1
       else: 
-        powerOf2Ceil(closure.fn.maxSlots + 1)
+        1024 #(int)powerOf2Ceil((uint32)closure.fn.maxSlots + 1)
   let stack = vm.allocate(Value, stackCapacity)
   
   result = vm.allocate(TFiber)

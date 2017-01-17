@@ -1,5 +1,6 @@
 
 import model
+import vm
 import core
 
 import unittest
@@ -38,15 +39,15 @@ suite "VM":
   wvm.init(16 * 1024 * 1024)
   wvm.initializeCore()
 
-#   test "2 + 2":
-#     check wvm.interpret("""
+  test "2 + 2":
+    check wvm.interpret("""
 
-# var yMin = 1
-# var yMax = 2
-# var xMin = 3
-# var xMax = 4
+var yMin = 1
+var yMax = 2
+var xMin = 3
+var xMax = 4
 
-# System.print(xMax)
+System.print(xMax)
 
 
-#     """) == CompileError
+    """) == CompileError

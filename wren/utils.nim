@@ -1,59 +1,54 @@
-import macros
 
-proc getName(node: NimNode): string =
-  case node.kind
-  of nnkPostfix:
-    return $node[1].ident
-  of nnkIdent:
-    return $node.ident
-  # of nnkEmpty:
-  #   return "anonymous"
+
+type
+  SizeType = uint16
+  FlexibleArray*{.unchecked.}[T] = array[0..0, T]
+  PArray*[T] = ptr FlexibleArray[T]
+
+  Buffer*[T] = object
+    data: PArray[T]
+    count: int
+
+  # String = object
+  #   buffer*: cstring
+  #   length*: int
+
+  # SymbolTable* = Buffer[String]
+
+const
+  CountBits = 24
+  CapacityOne = 1 shl CountBits
+  CountMask = CapacityOne - 1
+
+import strutils
+
+proc grow[T](buf: var Buffer[T], currentCap: int) =
+  var capacity: int
+  if currentCap == 0:
+    capacity = 4
+    buf.count = 3 shl CountBits
   else:
-    echo $node.kind
-    error("Unknown name: " & node.treeRepr)
+    capacity = currentCap shl 1
+    inc buf.count, CapacityOne
+  #echo "realloc to ", capacity  
 
-proc transformApiProc(fn: NimNode): NimNode =
-  let name = fn[0].getName
-  hint("Processing '" & name & "' as a WrenVM proc.")
-  let prc = fn.copyNimTree
-  let params = prc[3]  # Formal Parameters
-  
-  params.insert(1, newIdentDefs(ident("vm"), ident("VM")))
+template `[]`*[T](buf: Buffer[T], i: int): T = buf.data[i]
+template `[]=`*[T](buf: var Buffer[T], i: int, val: T) = buf.data[i] = val
+template len*[T](buf: Buffer[T]): int = (buf.count and CountMask)
 
-  # # First param must be a VM reference.
-  # let paramType = params[1][^2]
-  # if paramType.ident != !"VM":
-  #   error("WrenVM proc must accept VM as first parameter.")
+proc add*[T](buf: var Buffer[T], val: T) =
+  let capacity = (1 shl (buf.count shr CountBits)) shr 1
+  if buf.len == capacity:
+    grow(buf, capacity)
+  inc buf.count
 
-  let tmplParams = newNimNode nnkFormalParams
-  tmplParams.add params[0]
+var b: Buffer[int]
 
-  let call = newNimNode nnkCall
-  call.add newDotExpr(newIdentNode("vm"), newIdentNode(name))
+for i in 0..222:
+  b.add i
 
-  for p in 2..<params.len:
-    #echo "template param: ", params[p].treeRepr
-    tmplParams.add params[p].copyNimTree
-    for i in 0..<(params[p].len - 2):
-      call.add params[p][i].copyNimNode
+b[0] = 77
 
-  let tmpl = newNimNode(nnkTemplateDef)
-  tmpl.add fn[0].copyNimTree
-  tmpl.add fn[1].copyNimTree
-  tmpl.add fn[2].copyNimTree
-  tmpl.add tmplParams
-  tmpl.add newEmptyNode()
-  tmpl.add newEmptyNode()
-  tmpl.add newStmtList(
-    newNimNode(nnkMixinStmt).add(newIdentNode("vm")),
-    call
-  )
-    
-  result = newStmtList()
-  result.add prc
-  result.add tmpl
-  #echo result.treeRepr
+for i in 1..222:
+  b[i] = b[i-1]
 
-
-macro wren*(fn: untyped): untyped =
-  result = transformApiProc(fn)
