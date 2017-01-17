@@ -4,6 +4,7 @@ proc isUndefined*(val: Value): bool = val.kind == vkUndefined
 proc isFalse*(val: Value): bool = val.kind == vkFalse
 proc isObj*(val: Value): bool = val.kind == vkObj
 proc isNum*(val: Value): bool = val.kind == vkNum
+proc isNull*(val: Value): bool = val.kind == vkNull
 
 proc val*(num: float64): Value =
   result.kind = vkNum

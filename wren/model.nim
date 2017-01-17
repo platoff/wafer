@@ -54,6 +54,8 @@ type
     okClosure
     okMap
     okFiber
+    okInstance
+    okUpvalue
 
   Obj* = ptr TObj
   TObj = object
@@ -69,6 +71,11 @@ type
     hash: uint32
     value*: FlexibleArray[char]
 
+  ObjInstance* = ptr TInstance
+  TInstance = object
+    obj*: TObj
+    fields*: FlexibleArray[Value]
+
   MapEntry = object
     key: Value
     value: Value
@@ -80,12 +87,12 @@ type
     count: uint32
     entries: PArray[MapEntry]
   
-  ObjUpvalue = ptr TUpvalue
+  ObjUpvalue* = ptr TUpvalue
   TUpvalue = object
     obj: TObj
-    value: ptr Value
-    closed: Value
-    next: ObjUpValue
+    value*: ptr Value
+    closed*: Value
+    next*: ObjUpValue
 
   Primitive* = proc (vm: VM, args: PArray[Value]): bool {.nimcall.} 
   ForeignMethodFn* = proc (vm: pointer) {.cdecl.} 
@@ -116,26 +123,29 @@ type
   TClosure = object
     obj: TObj
     fn*: ObjFn
-    upvalues: FlexibleArray[ObjUpvalue]
+    upvalues*: FlexibleArray[ObjUpvalue]
 
-  CallFrame = object
-    ip: PArray[byte]
-    closure: ObjClosure
-    stackStart: PArray[Value]
+  CallFrame* = object
+    ip*: PArray[byte]
+    closure*: ObjClosure
+    stackStart*: PArray[Value]
 
   ObjFiber* = ptr TFiber
   TFiber = object
     obj: TObj
-    stack: PArray[Value]
-    stackTop: PArray[Value]
+    stack*: PArray[Value]
+    stackTop*: PArray[Value]
     stackCapacity: int
-    frames: PArray[CallFrame]
-    numFrames: int
-    frameCapacity: int
-    openUpvalues: PArray[ObjUpvalue]
-    caller: ObjFiber
+    frames*: PArray[CallFrame]
+    numFrames*: int
+    frameCapacity*: int
+  # Pointer to the first node in the linked list of open upvalues that are
+  # pointing to values still on the stack. The head of the list will be the
+  # upvalue closest to the top of the stack, and then the list works downwards. 
+    openUpvalues*: ObjUpvalue
+    caller*: ObjFiber
     error*: Value
-    callerIsTrying: bool
+    callerIsTrying*: bool
 
   MethodKind* = enum
   # A primitive method implemented in C in the VM. Unlike foreign methods,
@@ -161,22 +171,22 @@ type
     obj*: TObj
     superclass*: ObjClass
     numFields*: int
-    methods: Buffer[Method]
+    methods*: Buffer[Method]
     name*: ObjString
 
   VM* = ptr WrenVM
   WrenVM* = object
-    boolClass: ObjClass
+    boolClass*: ObjClass
     classClass*: ObjClass
-    fiberClass: ObjClass
-    fnClass: ObjClass
-    listClass: ObjClass
-    mapClass: ObjClass
-    nullClass: ObjClass
-    numClass: ObjClass
+    fiberClass*: ObjClass
+    fnClass*: ObjClass
+    listClass*: ObjClass
+    mapClass*: ObjClass
+    nullClass*: ObjClass
+    numClass*: ObjClass
     objectClass*: ObjClass
-    rangeClass: ObjClass
-    stringClass: ObjClass
+    rangeClass*: ObjClass
+    stringClass*: ObjClass
 
     fiber*: ObjFiber
 
@@ -194,11 +204,20 @@ type
     modules*: ObjMap  
     methodNames*: SymbolTable
 
+  # Pointer to the bottom of the range of stack slots available for use from
+  # the C API. During a foreign method, this will be in the stack of the fiber
+  # that is executing a method.
+  #
+  # If not in a foreign method, this is initially NULL. If the user requests
+  # slots by calling wrenEnsureSlots(), a stack is created and this is
+  # initialized.
+    apiStack*: ptr Value
+
     compiler*: pointer
 
 proc collectGarbage(vm: VM)
 
-proc reallocate(vm: VM, memory: pointer; oldSize, newSize: int): pointer {.inline.} =
+proc reallocate*(vm: VM, memory: pointer; oldSize, newSize: int): pointer {.inline.} =
   inc vm.bytesAllocated, newSize - oldSize
   when defined(DebugGCStress):
     if newSize > 0:
@@ -221,6 +240,16 @@ proc allocate(vm: VM, T: typedesc, n: int): PArray[T] {.inline.} =
 
 proc allocateFlex(vm: VM, T: typedesc, I: typedesc, n: int): ptr T {.inline.} =
   cast[ptr T](vm.reallocate(nil, 0, sizeof(T) + n * sizeof I))
+
+#
+#
+#
+
+proc inc*[T](pa: var PArray[T], n = 1) =
+  pa = cast[PArray[T]](cast[int](pa) +% (sizeof(T) * n))
+
+proc dec*[T](pa: var PArray[T], n = 1) =
+  pa = cast[PArray[T]](cast[int](pa) -% (sizeof(T) * n))
 
 #
 # Buffers
@@ -306,7 +335,8 @@ proc ensure*(vm: VM, symbols: var SymbolTable, name: cstring, length: int): int 
 ##
 
 type
-  ObjectType = ObjClosure | ObjFn | ObjString | ObjMap | ObjModule | ObjClass | Obj
+  ObjectType = ObjClosure | ObjFn | ObjString | ObjMap | ObjModule | ObjClass | Obj |
+    ObjInstance
 
 # Object Classes downcast
 converter objectDowncast*(obj: ObjectType): Obj {.inline.} = cast[Obj](obj)
@@ -341,6 +371,10 @@ proc isString*(value: Value): bool {.inline.} =
   value.isObj and value.asObj.kind == okString
 proc isClass*(value: Value): bool {.inline.} = 
   value.isObj and value.asObj.kind == okClass
+proc isInstance*(value: Value): bool {.inline.} = 
+  value.isObj and value.asObj.kind == okInstance
+proc isClosure*(value: Value): bool {.inline.} = 
+  value.isObj and value.asObj.kind == okClosure
 
 proc getClass*(vm: VM, value: Value): ObjClass {.inline.} =
   if value.isNum:
@@ -439,10 +473,15 @@ proc newString*(vm: VM, text: cstring): ObjString =
 template c_value*(str: ObjString): cstring = cast[cstring](addr str.value[0])
 template len*(str: ObjString): int = int(str.length)
 
-template `$$`*(str: cstring): pointer = str.pointer
-template `$$`*(str: ObjString): pointer = str.pointer
+proc `$$`*(str: cstring): String = 
+  result.buffer = str
+  result.length = str.len
 
-proc stringFormat*(vm: VM, format: cstring, values: varargs[pointer,`$$`]): ObjString  =
+proc `$$`*(str: ObjString): String = 
+  result.buffer = str.c_value
+  result.length = str.length.int
+
+proc stringFormat*(vm: VM, format: cstring, values: varargs[String,`$$`]): ObjString  =
   # Calculate the length of the result string. Do this up front so we can
   # create the final string with a single allocation.
   var totalLength = 0
@@ -450,12 +489,7 @@ proc stringFormat*(vm: VM, format: cstring, values: varargs[pointer,`$$`]): ObjS
   for c in format:
     case c:
     of '$':
-      let str = cast[cstring](values[i])
-      inc totalLength, str.len
-      inc i
-
-    of '@':
-      inc totalLength, cast[ObjString](values[i]).len
+      inc totalLength, values[i].length
       inc i
 
     else:
@@ -470,16 +504,8 @@ proc stringFormat*(vm: VM, format: cstring, values: varargs[pointer,`$$`]): ObjS
   for c in format:
     case c:
     of '$':
-      let str = cast[cstring](values[i])
-      let length = str.len
-      copyMem(addr result.value[dst], str, length)
-      inc dst, length
-      inc i
-
-    of '@':
-      let str = cast[ObjString](values[i])
-      copyMem(addr result.value[dst], addr str.value[0], str.length)
-      inc dst, str.len
+      copyMem(addr result.value[dst], values[i].buffer, values[i].length)
+      inc dst, values[i].length
       inc i
 
     else:
@@ -625,6 +651,26 @@ proc newModule*(vm: VM, name: ObjString): ObjModule  =
   vm.initObj(result.obj, okModule, nil)
   result.name = name
 
+
+proc newInstance*(vm: VM, classObj: ObjClass): ObjInstance =
+  result = allocateFlex(vm, TInstance, Value, classObj.numFields)
+  initObj(vm, result.obj, okInstance, classObj)
+
+  # Initialize fields to null.
+  for i in 0..<classObj.numFields:
+    result.fields[i] = NullVal
+
+proc newUpvalue*(vm: VM, value: ptr Value): ObjUpvalue =
+  result = allocate(vm, TUpvalue)
+
+  # Upvalues are never used as first-class objects, so don't need a class.
+  initObj(vm, result.obj, okUpvalue, nil)
+
+  result.value = value
+  result.closed = NullVal
+  result.next = nil
+
+
 ##
 ## F U N C T I O N    A N D    C L O S U R E
 ##
@@ -750,10 +796,6 @@ proc bindSuperclass*(vm: VM, subclass: ObjClass, superclass: ObjClass) =
   for i in 0..<superclass.methods.len:
     vm.bindMethod(subclass, i, superclass.methods.data[i])
 
-##
-## G A R B A G E    C O L L E C T O R
-##
-
 proc pushRoot*(vm: VM, obj: Obj)  =
   assert vm.numTempRoots < MaxTempRoots
   vm.tempRoots[vm.numTempRoots] = cast[Obj](obj)
@@ -762,6 +804,41 @@ proc pushRoot*(vm: VM, obj: Obj)  =
 proc popRoot*(vm: VM, obj: Obj)  = 
   dec vm.numTempRoots
   assert vm.tempRoots[vm.numTempRoots].pointer == obj.pointer
+
+proc newClass*(vm: VM, superclass: ObjClass, numFields: int, name: ObjString): ObjClass =
+  # Create the metaclass.
+  let metaclassName = stringFormat(vm, "$ metaclass", name)
+  pushRoot(vm, metaclassName)
+
+  let metaclass = newSingleClass(vm, 0, metaclassName)
+  metaclass.obj.classObj = vm.classClass
+
+  popRoot(vm, metaclassName)
+
+  # Make sure the metaclass isn't collected when we allocate the class.
+  pushRoot(vm, metaclass)
+
+  # Metaclasses always inherit Class and do not parallel the non-metaclass
+  # hierarchy.
+  bindSuperclass(vm, metaclass, vm.classClass)
+
+  result = newSingleClass(vm, numFields, name)
+
+  # Make sure the class isn't collected while the inherited methods are being
+  # bound.
+  pushRoot(vm, result)
+
+  result.obj.classObj = metaclass
+  bindSuperclass(vm, result, superclass)
+
+  popRoot(vm, result)
+  popRoot(vm, metaclass)
+
+
+##
+## G A R B A G E    C O L L E C T O R
+##
+
 
 proc grayObj(vm: VM, obj: Obj) =
   if obj == nil: return
