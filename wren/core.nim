@@ -9,6 +9,11 @@ proc defineClass(vm: VM, module: ObjModule, name: cstring): ObjClass =
   discard vm.defineVariable(module, name, nameString.len, result.val)
   vm.popRoot(nameString)
 
+proc findVariable(vm: VM, module: ObjModule, name: cstring): Value =
+  let symbol = find(module.variableNames, name, len(name))
+  result = module.variables[symbol]
+
+
 proc initializeCore*(vm: VM) =
   let coreModule = vm.newModule(nil)
   vm.pushRoot coreModule
@@ -117,3 +122,32 @@ proc initializeCore*(vm: VM) =
   # The rest of the classes can now be defined normally.
   const coreModuleSource = cstring(staticRead"core.wren")
   echo interpretInModule(vm, nil, coreModuleSource)
+
+  vm.numClass = vmcast[ObjClass](findVariable(vm, coreModule, "Num"))
+  vm.numClass.primitive "toString":
+    ret wrenvm.newString(($arg(0).asNum).cstring).val
+
+
+  vm.stringClass = vmcast[ObjClass](findVariable(vm, coreModule, "String"))
+  vm.stringClass.primitive "toString":
+    ret arg(0)
+  
+  let systemClass = vmcast[ObjClass](findVariable(vm, coreModule, "System"))
+  systemClass.obj.classObj.primitive  "writeString_(_)":
+    echo "* print: ", vmcast[ObjString](arg(1)).c_value
+    ret arg(1)
+
+  # While bootstrapping the core types and running the core module, a number
+  # of string objects have been created, many of which were instantiated
+  # before stringClass was stored in the VM. Some of them *must* be created
+  # first -- the ObjClass for string itself has a reference to the ObjString
+  # for its name.
+  
+  # These all currently have a NULL classObj pointer, so go back and assign
+  # them now that the string class is known.
+  var obj = vm.first
+  while obj != nil:
+    if obj.kind == okString:
+      echo "string class: ", cast[ObjString](obj).c_value
+      obj.classObj = vm.stringClass
+    obj = obj.next

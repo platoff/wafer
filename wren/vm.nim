@@ -116,17 +116,45 @@ proc checkArity(vm: VM, value: Value, numArgs: int): bool =
     vm.fiber.error = newString(vm, "Function expects more arguments.").val
     result = false
 
+proc ensureStack(vm: VM, fiber: ObjFiber, needed: int) =
+  if fiber.stackCapacity >= needed:
+    return
+
+  echo "not implemented"
+
+# Adds a new [CallFrame] to [fiber] invoking [closure] whose stack starts at
+# [stackStart].
+proc appendCallFrame(vm: VM, fiber: ObjFiber,
+                                closure: ObjClosure, stackStart: PArray[Value]) =
+  # The caller should have ensured we already have enough capacity.
+  assert(fiber.frameCapacity > fiber.numFrames, "No memory for call frame.")
+  
+  let frame = addr fiber.frames[fiber.numFrames]
+  inc fiber.numFrames
+  frame.stackStart = stackStart
+  frame.closure = closure
+  frame.ip = closure.fn.code.data
+
 # Pushes [closure] onto [fiber]'s callstack and invokes it. Expects [numArgs]
 # arguments (including the receiver) to be on the top of the stack already.
 proc callFunction(
     vm: VM, fiber: ObjFiber, closure: ObjClosure, numArgs: int) =
   # Grow the call frame array if needed.
+  echo "call Function"
   if fiber.numFrames + 1 > fiber.frameCapacity:
     let max = fiber.frameCapacity * 2
     fiber.frames = cast[PArray[CallFrame]](reallocate(vm, fiber.frames,
         sizeof(CallFrame) * fiber.frameCapacity,
         sizeof(CallFrame) * max))
     fiber.frameCapacity = max
+
+  # Grow the stack if needed.
+  let stackSize = (cast[int](fiber.stackTop) -% cast[int](fiber.stack)) div sizeof(Value)
+  let needed = stackSize + closure.fn.maxSlots
+  ensureStack(vm, fiber, needed)
+  
+  appendCallFrame(vm, fiber, closure, cast[PArray[Value]](addr fiber.stackTop[-numArgs]))
+  
 
 proc debugPrintStackTrace(vm: VM) =
   echo "print stack trace here"
@@ -384,6 +412,7 @@ proc runInterpreter(vm: VM, fib: ObjFiber): InterpretResult =
       CODE_CALL_14,
       CODE_CALL_15,
       CODE_CALL_16:
+        echo "!!! CALL"
         # Add one for the implicit receiver argument.
         let numArgs = instruction - CODE_CALL_0.int + 1
         let symbol = readShort()
@@ -391,12 +420,14 @@ proc runInterpreter(vm: VM, fib: ObjFiber): InterpretResult =
         # The receiver is the first argument.
         let args = cast[PArray[Value]](cast[int](fiber.stackTop) -% (sizeof(Value) * numArgs))
         let classObj = getClass(vm, args[0])
-
+        assert classObj != nil, "object has no class " & $cast[Obj](args[0].obj).kind
+        
         ## Complete Call
         # If the class's method table doesn't include the symbol, fail.
         let meth = classObj.methods[symbol]
         if symbol >= classObj.methods.len or
           meth.kind == METHOD_NONE:
+          echo "Method not found"
           methodNotFound(vm, classObj, symbol)
   #  template runtimeError(): InterpretResult =
           storeFrame()
@@ -405,7 +436,7 @@ proc runInterpreter(vm: VM, fib: ObjFiber): InterpretResult =
             return RuntimeError
           fiber = vm.fiber
           loadFrame()
-        
+
         case meth.kind:
         of METHOD_PRIMITIVE:
             if meth.primitive(vm, args):
@@ -426,7 +457,6 @@ proc runInterpreter(vm: VM, fib: ObjFiber): InterpretResult =
               loadFrame()
 
         of METHOD_FOREIGN:
-              echo " not implemented"
               return RuntimeError
 
         of METHOD_FN_CALL:
@@ -690,9 +720,6 @@ proc runInterpreter(vm: VM, fib: ObjFiber): InterpretResult =
         # A CODE_END should always be preceded by a CODE_RETURN. If we get here,
         # the compiler generated wrong code.
         assert false, "unrechable"
-
-
-
 
 proc interpretInModule*(vm: VM, module, source: cstring): InterpretResult =
   var nameValue: ObjString = nil

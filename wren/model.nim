@@ -30,7 +30,7 @@ else:
     Value* = object
       case kind*: ValueKind
       of vkNum: num: float64
-      else: obj: pointer
+      else: obj*: pointer
 
 const 
 # The maximum number of temporary objects that can be made visible to the GC
@@ -62,7 +62,7 @@ type
     kind*: ObjKind
     isDark: bool
     classObj*: ObjClass
-    next: Obj # The next object in the linked list of all currently allocated objects.
+    next*: Obj # The next object in the linked list of all currently allocated objects.
 
   ObjString* = ptr TString
   TString = object
@@ -135,7 +135,7 @@ type
     obj: TObj
     stack*: PArray[Value]
     stackTop*: PArray[Value]
-    stackCapacity: int
+    stackCapacity*: int
     frames*: PArray[CallFrame]
     numFrames*: int
     frameCapacity*: int
@@ -192,7 +192,7 @@ type
 
     bytesAllocated: int
     nextGC: int
-    first: Obj
+    first*: Obj
 
     gray: PArray[Obj]
     grayCount: int

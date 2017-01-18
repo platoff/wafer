@@ -47,7 +47,8 @@ var yMax = 2
 var xMin = 3
 var xMax = 4
 
-System.print(xMax)
+System.print("hey herra borra")
+System.print(777)
 
 
-    """) == CompileError
+    """) == Success
