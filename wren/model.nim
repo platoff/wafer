@@ -56,6 +56,7 @@ type
     okFiber
     okInstance
     okUpvalue
+    okRange
 
   Obj* = ptr TObj
   TObj = object
@@ -173,6 +174,13 @@ type
     numFields*: int
     methods*: Buffer[Method]
     name*: ObjString
+
+  ObjRange* = ptr TRange
+  TRange = object
+    obj*: TObj
+    f*: float64
+    to*: float64
+    isInclusive*: bool
 
   VM* = ptr WrenVM
   WrenVM* = object
@@ -336,7 +344,7 @@ proc ensure*(vm: VM, symbols: var SymbolTable, name: cstring, length: int): int 
 
 type
   ObjectType = ObjClosure | ObjFn | ObjString | ObjMap | ObjModule | ObjClass | Obj |
-    ObjInstance
+    ObjInstance | ObjRange
 
 # Object Classes downcast
 converter objectDowncast*(obj: ObjectType): Obj {.inline.} = cast[Obj](obj)
@@ -704,6 +712,18 @@ proc newClosure*(vm: VM, fn: ObjFn): ObjClosure =
   # after the closure is created but before the upvalue array is populated.
   for i in 0..<fn.numUpvalues:
     result.upvalues[i] = nil
+
+##
+## R A N G E
+##
+
+proc newRange*(vm: VM, f, to: float64, isInclusive: bool): ObjRange = 
+  echo "new range ", f, " to ", to
+  result = vm.allocate(TRange)
+  vm.initObj(result.obj, okRange, vm.rangeClass)
+  result.f = f
+  result.to = to
+  result.isInclusive = isInclusive
 
 ##
 ## F I B E R

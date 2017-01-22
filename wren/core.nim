@@ -1,6 +1,7 @@
 
 import model
 import vm
+import math
 
 proc defineClass(vm: VM, module: ObjModule, name: cstring): ObjClass =
   let nameString = vm.newString(name)
@@ -13,6 +14,10 @@ proc findVariable(vm: VM, module: ObjModule, name: cstring): Value =
   let symbol = find(module.variableNames, name, len(name))
   result = module.variables[symbol]
 
+proc validateNum(vm: VM, arg: Value, argName: cstring): bool =
+  if isNum(arg): return true
+  vm.fiber.error = vm.stringFormat("$ must be a number.", argName).val
+  result = false
 
 proc initializeCore*(vm: VM) =
   let coreModule = vm.newModule(nil)
@@ -127,11 +132,112 @@ proc initializeCore*(vm: VM) =
   vm.numClass.primitive "toString":
     ret wrenvm.newString(($arg(0).asNum).cstring).val
 
+  vm.numClass.primitive "+(_)":
+      if not validateNum(wrenvm, arg(1), "Right operand"):
+        return false
+      ret arg(0).asNum + arg(1).asNum
+
+  vm.numClass.primitive "-(_)":
+      if not validateNum(wrenvm, arg(1), "Right operand"):
+        return false
+      ret arg(0).asNum - arg(1).asNum
+
+  vm.numClass.primitive "*(_)":
+      if not validateNum(wrenvm, arg(1), "Right operand"):
+        return false
+      ret arg(0).asNum * arg(1).asNum
+
+  vm.numClass.primitive "/(_)":
+      if not validateNum(wrenvm, arg(1), "Right operand"):
+        return false
+      ret arg(0).asNum / arg(1).asNum
+
+  vm.numClass.primitive ">(_)":
+      if not validateNum(wrenvm, arg(1), "Right operand"):
+        return false
+      ret arg(0).asNum > arg(1).asNum
+
+  vm.numClass.primitive "..(_)":
+    if not validateNum(wrenvm, arg(1), "Right hand side of range"):
+      return false
+    let f = arg(0).asNum
+    let to = arg(1).asNum
+    ret newRange(wrenvm, f, to, true).val
+    
+  vm.numClass.primitive "...(_)":
+    if not validateNum(wrenvm, arg(1), "Right hand side of range"):
+      return false
+    let f = arg(0).asNum
+    let to = arg(1).asNum
+    ret newRange(wrenvm, f, to, false).val
+
+  vm.numClass.primitive "-":
+    ret -(arg(0).asNum)
+
+  vm.numClass.primitive "floor":
+      if not validateNum(wrenvm, arg(1), "Right operand"):
+        return false
+      ret floor(arg(0).asNum)
+
+  vm.rangeClass = vmcast[ObjClass](findVariable(vm, coreModule, "Range"))
+  vm.rangeClass.primitive "from":
+    ret vmcast[ObjRange](arg(0)).f
+
+  vm.rangeClass.primitive "to":
+    ret vmcast[ObjRange](arg(0)).to
+
+  vm.rangeClass.primitive "min":
+    let r = vmcast[ObjRange](arg(0))
+    ret min(r.f, r.to)
+
+  vm.rangeClass.primitive "max":
+    let r = vmcast[ObjRange](arg(0))
+    ret max(r.f, r.to)
+
+  vm.rangeClass.primitive "isInclusive":
+    ret vmcast[ObjRange](arg(0)).isInclusive
+
+  vm.rangeClass.primitive "iterate(_)":
+    let r = vmcast[ObjRange](arg(0))
+
+    # Special case: empty range.
+    if r.f == r.to and  not r.isInclusive:
+      ret false
+
+    # Start the iteration.
+    if isNull(arg(1)): ret r.f
+
+    if not validateNum(wrenvm, arg(1), "Iterator"): 
+      return false
+
+    var it = asNum(arg(1))
+
+    # Iterate towards [to] from [from].
+    if r.f < r.to:
+      it = it + 1
+      if it > r.to: ret false
+    else:
+      it = it - 1
+      if it < r.to: ret false
+  
+    if not r.isInclusive and it == r.to: ret false
+
+    ret it
+
+  vm.rangeClass.primitive "iteratorValue(_)":
+    ret arg(1)
 
   vm.stringClass = vmcast[ObjClass](findVariable(vm, coreModule, "String"))
   vm.stringClass.primitive "toString":
     ret arg(0)
-  
+  vm.stringClass.primitive "[_]":
+    let str = vmcast[ObjString](arg(0))
+    if arg(1).isNum:
+      ret wrenvm.newString(addr str.value[arg(1).asNum.int], 1)
+    else:
+      echo "subscript unsupported"
+      return false
+
   let systemClass = vmcast[ObjClass](findVariable(vm, coreModule, "System"))
   systemClass.obj.classObj.primitive  "writeString_(_)":
     echo "* print: ", vmcast[ObjString](arg(1)).c_value

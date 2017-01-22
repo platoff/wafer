@@ -347,6 +347,7 @@ proc runInterpreter(vm: VM, fib: ObjFiber): InterpretResult =
     frame.ip = ip
 
   proc readByte(): int =
+    echo "IP: ", cast[int](ip) -% cast[int](frame.ip)
     inc ip
     result = ip[-1].int
 
@@ -460,6 +461,7 @@ proc runInterpreter(vm: VM, fib: ObjFiber): InterpretResult =
               return RuntimeError
 
         of METHOD_FN_CALL:
+            echo "method fn call"
             if not checkArity(vm, args[0], numArgs):
               return RuntimeError
 
@@ -468,6 +470,7 @@ proc runInterpreter(vm: VM, fib: ObjFiber): InterpretResult =
             loadFrame()
 
         of METHOD_BLOCK:
+            echo ">> method block CALL"
             storeFrame()
             callFunction(vm, fiber, meth.obj, numArgs)
             loadFrame()
@@ -633,6 +636,7 @@ proc runInterpreter(vm: VM, fib: ObjFiber): InterpretResult =
         drop()
 
     of CODE_RETURN:
+        echo "!! RET"
         let res = pop()
         dec fiber.numFrames
 

@@ -9,6 +9,7 @@ type
     oBlock
     oFunc
     oFuncNative
+    oVector
 
   FlexibleArray{.unchecked.}[T] = array[0..0, T]
   PArray[T] = ptr FlexibleArray[T]
@@ -78,6 +79,11 @@ type
   ContextObj = object
     obj: Object
     pairs: Buffer[Pair]
+
+  Vector = ptr VectorObj
+  VectorObj = object
+    obj: Object
+    data: Buffer[Value]
 
   VM = ptr VMObj
   VMObj = object
@@ -152,6 +158,11 @@ proc add[T](vm: VM, buffer: var Buffer[T], val: T) =
   let last = buffer.count
   vm.setLen(buffer, last + 1)
   buffer.data[last] = val
+
+proc add[T](vm: VM, buffer: var Buffer[T], blk: ptr T, len: int) = 
+  let last = buffer.count
+  vm.setLen(buffer, last + len)
+  copyMem(addr buffer.data[last], blk, len * sizeof T)
 
 iterator items[T](buf: Buffer[T]): T = 
   for i in 0..< buf.count:
@@ -269,6 +280,25 @@ proc `$`(f: Function): string = "func " & $f.locals & " " & $f.body
 proc `$`(f: FuncNative): string = "native (" & $f.base.params & ")"
 
 #
+# Vector
+#
+
+proc newVector(vm: VM): Vector =
+  result = vm.allocate(VectorObj)
+  result.obj.codeword = oVector
+
+proc `$`(v: Vector): string =
+  result = "["
+  var comma = false
+  for i in 0..<v.data.count:
+    if comma: result.add ", "
+    else: comma = true
+    result.add $(v.data[i])
+  result.add ']'
+
+proc value(f: Vector): Value = constValue(f)
+
+#
 # Values
 # 
 
@@ -283,6 +313,7 @@ proc `$`(v: Value): string =
     of oBlock: $(cast[Block](obj))
     of oFunc: $(cast[Function](obj))
     of oFuncNative: $(cast[FuncNative](obj))
+    of oVector: $(cast[Vector](obj))
   of tagSpecial: 
     case (v.int) shr 2:
     of 0: "false"
@@ -361,6 +392,7 @@ proc lookup(vm: VM, ctx: Context, symbol: StringConst, create: static[bool]): pt
   else:
     assert(false, "lookup failed: " & $symbol)
 
+
 #
 # Parser
 #
@@ -427,6 +459,7 @@ proc popIP(vm: VM): ptr Value =
   result = vm.rstack.data[vm.stack.count]
 
 proc showStack(vm: VM) =
+  echo "STACK:"
   for i in vm.stack:
     echo i
 
@@ -457,12 +490,18 @@ const natives = [
     let cond = cast[Block](vm.pop().asPointer)
     vm.push Null
     while true:
-      vm.push Null
+      vm.push False
       vm.interpretBlock(cond)
       if vm.pop.int == False.int:
         break
       vm.interpretBlock(body)
-  )
+  ),
+  (name: "make-vector!", params: 1,  f: proc (vm: VM) = 
+    let init = cast[Block](vm.peek().asPointer)
+    let v = vm.newVector()
+    vm.add v.data, addr init.data[0], init.len
+    vm.poke value(v)
+  )  
 ]
 
 proc createNativeProcs(vm: VM) =
@@ -473,7 +512,6 @@ proc newVM(): VM =
   result = create VMObj
   result.context = create ContextObj # hack!
   result.createNativeProcs
-
 
 # Interprets single command
 proc interpret(vm: VM, ip: ptr Value, value: Value): ptr Value =
@@ -513,11 +551,13 @@ proc interpret(vm: VM, ip: ptr Value, value: Value): ptr Value =
       for i in 0..<f.base.params:
         result = vm.interpret(result, result[])
       f.f(vm)
+    else:
+      echo "hmmm... should I learn how to execute: ", obj.codeword
 
+# Does NOT change stack size
 proc interpretBlock(vm: VM, blk: Block) =
   var ip = addr blk.data[0]
   let last = addr blk.data[blk.len]
-  #vm.push Null
   while ip < last:
     vm.drop()
     ip = vm.interpret(ip, ip[])

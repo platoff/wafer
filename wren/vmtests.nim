@@ -42,13 +42,11 @@ suite "VM":
   test "2 + 2":
     check wvm.interpret("""
 
-var yMin = 1
-var yMax = 2
-var xMin = 3
-var xMax = 4
-
-System.print("hey herra borra")
-System.print(777)
-
+var z = 0
+{
+  System.print(z)
+  System.print("kjhkjh")
+  
+}  
 
     """) == Success
