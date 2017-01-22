@@ -9,7 +9,10 @@ type
     oBlock
     oFunc
     oFuncNative
+    oFuncContext
+    oContext
     oVector
+    oReactiveContext
 
   FlexibleArray{.unchecked.}[T] = array[0..0, T]
   PArray[T] = ptr FlexibleArray[T]
@@ -61,7 +64,7 @@ type
 
   FuncObj = object
     base: FuncBaseObj
-    locals: Block
+    locals: FuncContext
     body: Block
 
   Native = proc(vm: VM) {.nimcall.}
@@ -75,10 +78,29 @@ type
     symbol: StringConst
     value: Value
 
+  BaseContext = ptr BaseContextObj
+  BaseContextObj = object
+    obj: Object
+    parent: BaseContext
+
   Context = ptr ContextObj
   ContextObj = object
-    obj: Object
+    base: BaseContextObj
     pairs: Buffer[Pair]
+
+  FuncContext = ptr FuncContextObj
+  FuncContextObj = object
+    base: BaseContextObj
+    data: Buffer[Symbol]
+
+  Closure = object
+    symbol: StringConst
+    value: ptr Value
+
+  ReactiveContext = ptr ReactiveContextObj
+  ReactiveContextObj = object
+    base: BaseContextObj
+    closures: Buffer[Closure]
 
   Vector = ptr VectorObj
   VectorObj = object
@@ -87,11 +109,13 @@ type
 
   VM = ptr VMObj
   VMObj = object
-    stack: Buffer[Value]
-    rstack: Buffer[ptr Value]
     bytesAllocated: int
+    bp: int
+    stack: Buffer[Value]
+    #rstack: Buffer[ptr Value]
+    #frames: Buffer[int]
+    context: BaseContext
     constants: Buffer[Symbol]
-    context: Context
 
 const
   Null = Value((3 shl 2) or tagSpecial.int)
@@ -163,6 +187,14 @@ proc add[T](vm: VM, buffer: var Buffer[T], blk: ptr T, len: int) =
   let last = buffer.count
   vm.setLen(buffer, last + len)
   copyMem(addr buffer.data[last], blk, len * sizeof T)
+
+proc peek[T](buf: Buffer[T]): T =
+  assert buf.count > 0
+  buf.data[buf.count - 1]
+
+proc drop(buf: var Buffer)=
+  assert buf.count > 0
+  dec buf.count
 
 iterator items[T](buf: Buffer[T]): T = 
   for i in 0..< buf.count:
@@ -256,11 +288,15 @@ proc `$`(b: Block): string =
     result.add $(b.data[i])
   result.add ']'
 
+iterator items(blk: Block): Value =
+  for i in 0..<blk.len:
+    yield blk.data[i]
+
 #
 # Function
 #
 
-proc newFunc(vm: VM, params: int, locals, body: Block): Function =
+proc newFunc(vm: VM, params: int, locals: FuncContext, body: Block): Function =
   result = vm.allocate(FuncObj)
   result.base.obj.codeword = oFunc
   result.base.params = params
@@ -276,8 +312,21 @@ proc newFunc(vm: VM, params: int, f: Native): FuncNative =
 proc value(f: Function): Value = constValue(f)
 proc value(f: FuncNative): Value = constValue(f)
 
-proc `$`(f: Function): string = "func " & $f.locals & " " & $f.body
+proc `$`(f: Function): string = "func ... " & $f.body
 proc `$`(f: FuncNative): string = "native (" & $f.base.params & ")"
+
+#
+# Contexts
+#
+
+proc init(ctx: var BaseContextObj, kind: ObjectKind, parent: BaseContext) =
+  ctx.obj.codeword = kind
+  ctx.parent = parent
+
+proc newFuncContext(vm: VM, parent: BaseContext): FuncContext =
+  result = vm.allocate FuncContextObj
+  init(result.base, oFuncContext, parent)
+  init(result.data)
 
 #
 # Vector
@@ -286,6 +335,7 @@ proc `$`(f: FuncNative): string = "native (" & $f.base.params & ")"
 proc newVector(vm: VM): Vector =
   result = vm.allocate(VectorObj)
   result.obj.codeword = oVector
+  init(result.data)
 
 proc `$`(v: Vector): string =
   result = "["
@@ -314,6 +364,7 @@ proc `$`(v: Value): string =
     of oFunc: $(cast[Function](obj))
     of oFuncNative: $(cast[FuncNative](obj))
     of oVector: $(cast[Vector](obj))
+    else: "[" & $obj.codeword & "]"
   of tagSpecial: 
     case (v.int) shr 2:
     of 0: "false"
@@ -373,17 +424,24 @@ proc newBlock(vm: VM, buf: Buffer[Value]): Block =
 # Context
 #
 
+proc newContext(vm: VM, parent: BaseContext): Context =
+  result = vm.allocate(ContextObj)
+  init(result.base, oContext, parent)
+  init(result.pairs)
+
 proc add(vm: VM, ctx: Context, symbol: StringConst, val: Value) =
   let last = ctx.pairs.count
   vm.setLen ctx.pairs, last + 1
   ctx.pairs.data[last].symbol = symbol
   ctx.pairs.data[last].value = val
 
-proc lookup(vm: VM, ctx: Context, symbol: StringConst, create: static[bool]): ptr Value =
+proc lookup(vm: VM, ctx: BaseContext, symbol: StringConst, create: bool): ptr Value
+
+proc lookup(vm: VM, ctx: Context, symbol: StringConst, create: bool): ptr Value =
   for i in 0..<ctx.pairs.count:
     if ctx.pairs.data[i].symbol == symbol:
       return addr ctx.pairs.data[i].value
-  when create:
+  if create:
     let last = ctx.pairs.count
     vm.setLen ctx.pairs, last + 1
     ctx.pairs.data[last].symbol = symbol
@@ -392,6 +450,44 @@ proc lookup(vm: VM, ctx: Context, symbol: StringConst, create: static[bool]): pt
   else:
     assert(false, "lookup failed: " & $symbol)
 
+proc lookup(vm: VM, ctx: FuncContext, symbol: StringConst, create: bool): ptr Value =
+  for i in 0..<ctx.data.count:
+    if ctx.data[i] == symbol:
+#      echo "found symbol ", symbol, " at ", i, " bp = ", vm.bp, " value = ", vm.stack.data[vm.bp + i]
+      return addr vm.stack.data[vm.bp + i]
+  result = vm.lookup(ctx.base.parent, symbol, create)
+
+proc lookup(vm: VM, ctx: ReactiveContext, symbol: StringConst, create: bool): ptr Value =
+  for i in 0..<ctx.closures.count:
+    if ctx.closures[i].symbol == symbol:
+      return ctx.closures[i].value
+  # forward up
+  result = vm.lookup(ctx.base.parent, symbol, create)
+  if result != nil:
+    let last = ctx.closures.count
+    vm.setLen ctx.closures, last + 1
+    ctx.closures.data[last].symbol = symbol
+    ctx.closures.data[last].value = result    
+
+proc newReactiveContext(vm: VM, parent: BaseContext): ReactiveContext =
+  result = vm.allocate(ReactiveContextObj)
+  init(result.base, oReactiveContext, parent)
+  init(result.closures)
+
+proc lookup(vm: VM, ctx: BaseContext, symbol: StringConst, create: bool): ptr Value =
+  case ctx.obj.codeword:
+  of oFuncContext: 
+    result = vm.lookup(cast[FuncContext](ctx), symbol, create)
+  of oContext:
+    result = vm.lookup(cast[Context](ctx), symbol, create)
+  of oReactiveContext:
+    result = vm.lookup(cast[Context](ctx), symbol, create)
+  else:
+    assert false, "shit happens"
+
+proc install(vm: VM, ctx: BaseContext) =
+  ctx.parent = vm.context
+  vm.context = ctx
 
 #
 # Parser
@@ -453,10 +549,10 @@ proc pop(vm: VM): Value =
 proc drop(vm: VM) = 
   dec vm.stack.count
 
-proc push(vm: VM, ip: ptr Value) = vm.add vm.rstack, ip
-proc popIP(vm: VM): ptr Value = 
-  dec vm.rstack.count
-  result = vm.rstack.data[vm.stack.count]
+# proc push(vm: VM, ip: ptr Value) = vm.add vm.rstack, ip
+# proc popIP(vm: VM): ptr Value = 
+#   dec vm.rstack.count
+#   result = vm.rstack.data[vm.stack.count]
 
 proc showStack(vm: VM) =
   echo "STACK:"
@@ -470,7 +566,11 @@ const natives = [
   (name: "func", params: 2,  f: proc (vm: VM) = 
     let body = cast[Block](vm.pop().asPointer)
     let locals = cast[Block](vm.peek().asPointer)
-    let f = vm.newFunc(locals.len, locals, body)
+    let ctx = vm.newFuncContext(vm.context)
+    for i in locals:
+      let symbol = cast[Word](i.asPointer).symbol
+      vm.add ctx.data, symbol
+    let f = vm.newFunc(ctx.data.count, ctx, body)
     vm.poke(value(f))
   ),  
   (name: "add", params: 2,  f: proc (vm: VM) = 
@@ -501,17 +601,23 @@ const natives = [
     let v = vm.newVector()
     vm.add v.data, addr init.data[0], init.len
     vm.poke value(v)
-  )  
+  ),
+  (name: "react", params: 1,  f: proc (vm: VM) = 
+    let code = cast[Block](vm.peek().asPointer)
+    let ctx = vm.newReactiveContext(vm.context)
+    # vm.add v.data, addr init.data[0], init.len
+    # vm.poke value(v)
+  )
 ]
 
-proc createNativeProcs(vm: VM) =
+proc createSystem(vm: VM): Context =
+  result = vm.newContext(nil)
   for f in natives:
-    vm.add(vm.context, vm.newString(f.name), value(vm.newFunc(f.params, f.f)))
+    vm.add(result, vm.newString(f.name), value(vm.newFunc(f.params, f.f)))
 
 proc newVM(): VM =
   result = create VMObj
-  result.context = create ContextObj # hack!
-  result.createNativeProcs
+  result.context = cast[BaseContext](result.createSystem())
 
 # Interprets single command
 proc interpret(vm: VM, ip: ptr Value, value: Value): ptr Value =
@@ -543,8 +649,15 @@ proc interpret(vm: VM, ip: ptr Value, value: Value): ptr Value =
     of oFunc:
       let f = cast[Function](obj)
       nextIP()
+      let bp = vm.stack.count
       for i in 0..<f.base.params:
         result = vm.interpret(result, result[])
+      vm.bp = bp
+      let localCtx = cast[BaseContext](f.locals)
+      vm.install localCtx
+      vm.push Null # default result
+      vm.interpretBlock(f.body)
+      vm.context = vm.context.parent
     of oFuncNative:
       let f = cast[FuncNative](obj)
       nextIP()

@@ -5,6 +5,7 @@ include values
 
 suite "VM":
   let vm = newVM()
+  let root = cast[Context](vm.context)
 
   test "Constants":
     let a = vm.newString("hey there")
@@ -29,10 +30,10 @@ suite "VM":
 
   test "Lookup":
     let a = vm.newString("hey there")
-    let ip = vm.lookup(vm.context, a, true)
+    let ip = vm.lookup(root, a, true)
     check ip != nil
     check(ip[].int == Null.int)
-    let ip2 = vm.lookup(vm.context, a, false)
+    let ip2 = vm.lookup(root, a, false)
     check ip2 != nil
     check(ip == ip2)
 
@@ -43,7 +44,7 @@ suite "VM":
     check vm.stack[0].int == value(7).int
     vm.drop
     let i = vm.newString("i")
-    let iword = vm.lookup(vm.context, i, false)
+    let iword = vm.lookup(root, i, false)
     check iword != nil
     check iword[].int == value(7).int
 
@@ -69,6 +70,20 @@ suite "VM":
 
   test "Interpret Vector":
     let blk = vm.parse("make-vector! [1 2 3]")
+    vm.push Null
+    vm.interpretBlock(blk)
+    vm.showStack()
+    vm.drop
+
+  test "Interpret Func Call":
+    let blk = vm.parse("fn: func [a b] [print add a b] fn 7 100")
+    vm.push Null
+    vm.interpretBlock(blk)
+    vm.showStack()
+    vm.drop
+
+  test "Interpret Reactive":
+    let blk = vm.parse("v1: make-vector! [1 2 3] v2: react [v1] print v1 print v2")
     vm.push Null
     vm.interpretBlock(blk)
     vm.showStack()
