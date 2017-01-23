@@ -10,9 +10,9 @@ type
     oFunc
     oFuncNative
     oFuncContext
-    oContext
-    oVector
+    oMapContext
     oReactiveContext
+    oVector
 
   FlexibleArray{.unchecked.}[T] = array[0..0, T]
   PArray[T] = ptr FlexibleArray[T]
@@ -74,33 +74,32 @@ type
     base: FuncBaseObj
     f: Native
 
-  Pair = object
-    symbol: StringConst
-    value: Value
-
   BaseContext = ptr BaseContextObj
   BaseContextObj = object
     obj: Object
     parent: BaseContext
 
-  Context = ptr ContextObj
-  ContextObj = object
+  #Context[T] = ptr ContextObj[T]
+  ContextObj[T] = object
     base: BaseContextObj
-    pairs: Buffer[Pair]
+    data: Buffer[T]
 
   FuncContext = ptr FuncContextObj
-  FuncContextObj = object
-    base: BaseContextObj
-    data: Buffer[Symbol]
+  FuncContextObj = ContextObj[Symbol]
+
+  Pair = object
+    symbol: Symbol
+    value: Value
+
+  MapContext = ptr MapContextObj
+  MapContextObj = ContextObj[Pair]
 
   Closure = object
-    symbol: StringConst
+    symbol: Symbol
     value: ptr Value
 
   ReactiveContext = ptr ReactiveContextObj
-  ReactiveContextObj = object
-    base: BaseContextObj
-    closures: Buffer[Closure]
+  ReactiveContextObj = ContextObj[Closure]
 
   Vector = ptr VectorObj
   VectorObj = object
@@ -424,29 +423,26 @@ proc newBlock(vm: VM, buf: Buffer[Value]): Block =
 # Context
 #
 
-proc newContext(vm: VM, parent: BaseContext): Context =
-  result = vm.allocate(ContextObj)
-  init(result.base, oContext, parent)
-  init(result.pairs)
+proc newMapContext(vm: VM, parent: BaseContext): MapContext =
+  result = vm.allocate(MapContextObj)
+  init(result.base, oMapContext, parent)
+  init(result.data)
 
-proc add(vm: VM, ctx: Context, symbol: StringConst, val: Value) =
-  let last = ctx.pairs.count
-  vm.setLen ctx.pairs, last + 1
-  ctx.pairs.data[last].symbol = symbol
-  ctx.pairs.data[last].value = val
+proc add(vm: VM, ctx: MapContext, symbol: StringConst, val: Value) =
+  let last = ctx.data.count
+  vm.setLen ctx.data, last + 1
+  ctx.data.data[last].symbol = symbol
+  ctx.data.data[last].value = val
 
 proc lookup(vm: VM, ctx: BaseContext, symbol: StringConst, create: bool): ptr Value
 
-proc lookup(vm: VM, ctx: Context, symbol: StringConst, create: bool): ptr Value =
-  for i in 0..<ctx.pairs.count:
-    if ctx.pairs.data[i].symbol == symbol:
-      return addr ctx.pairs.data[i].value
+proc lookup(vm: VM, ctx: MapContext, symbol: StringConst, create: bool): ptr Value =
+  for i in 0..<ctx.data.count:
+    if ctx.data.data[i].symbol == symbol:
+      return addr ctx.data.data[i].value
   if create:
-    let last = ctx.pairs.count
-    vm.setLen ctx.pairs, last + 1
-    ctx.pairs.data[last].symbol = symbol
-    ctx.pairs.data[last].value = Null
-    result = addr ctx.pairs.data[last].value
+    vm.add ctx, symbol, Null
+    result = addr ctx.data.data[ctx.data.count - 1].value
   else:
     assert(false, "lookup failed: " & $symbol)
 
@@ -458,30 +454,30 @@ proc lookup(vm: VM, ctx: FuncContext, symbol: StringConst, create: bool): ptr Va
   result = vm.lookup(ctx.base.parent, symbol, create)
 
 proc lookup(vm: VM, ctx: ReactiveContext, symbol: StringConst, create: bool): ptr Value =
-  for i in 0..<ctx.closures.count:
-    if ctx.closures[i].symbol == symbol:
-      return ctx.closures[i].value
+  for i in 0..<ctx.data.count:
+    if ctx.data[i].symbol == symbol:
+      return ctx.data[i].value
   # forward up
   result = vm.lookup(ctx.base.parent, symbol, create)
   if result != nil:
-    let last = ctx.closures.count
-    vm.setLen ctx.closures, last + 1
-    ctx.closures.data[last].symbol = symbol
-    ctx.closures.data[last].value = result    
+    let last = ctx.data.count
+    vm.setLen ctx.data, last + 1
+    ctx.data.data[last].symbol = symbol
+    ctx.data.data[last].value = result    
 
 proc newReactiveContext(vm: VM, parent: BaseContext): ReactiveContext =
   result = vm.allocate(ReactiveContextObj)
   init(result.base, oReactiveContext, parent)
-  init(result.closures)
+  init(result.data)
 
 proc lookup(vm: VM, ctx: BaseContext, symbol: StringConst, create: bool): ptr Value =
   case ctx.obj.codeword:
   of oFuncContext: 
     result = vm.lookup(cast[FuncContext](ctx), symbol, create)
-  of oContext:
-    result = vm.lookup(cast[Context](ctx), symbol, create)
+  of oMapContext:
+    result = vm.lookup(cast[MapContext](ctx), symbol, create)
   of oReactiveContext:
-    result = vm.lookup(cast[Context](ctx), symbol, create)
+    result = vm.lookup(cast[ReactiveContext](ctx), symbol, create)
   else:
     assert false, "shit happens"
 
@@ -610,8 +606,8 @@ const natives = [
   )
 ]
 
-proc createSystem(vm: VM): Context =
-  result = vm.newContext(nil)
+proc createSystem(vm: VM): MapContext =
+  result = vm.newMapContext(nil)
   for f in natives:
     vm.add(result, vm.newString(f.name), value(vm.newFunc(f.params, f.f)))
 

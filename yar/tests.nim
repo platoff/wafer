@@ -5,7 +5,7 @@ include values
 
 suite "VM":
   let vm = newVM()
-  let root = cast[Context](vm.context)
+  let root = cast[MapContext](vm.context)
 
   test "Constants":
     let a = vm.newString("hey there")
@@ -82,9 +82,9 @@ suite "VM":
     vm.showStack()
     vm.drop
 
-  test "Interpret Reactive":
-    let blk = vm.parse("v1: make-vector! [1 2 3] v2: react [v1] print v1 print v2")
-    vm.push Null
-    vm.interpretBlock(blk)
-    vm.showStack()
-    vm.drop
+  # test "Interpret Reactive":
+  #   let blk = vm.parse("v1: make-vector! [1 2 3] v2: react [v1] print v1 print v2")
+  #   vm.push Null
+  #   vm.interpretBlock(blk)
+  #   vm.showStack()
+  #   vm.drop
